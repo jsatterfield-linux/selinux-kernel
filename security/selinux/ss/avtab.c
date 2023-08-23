@@ -21,7 +21,6 @@
 #include "avtab.h"
 #include "policydb.h"
 
-static struct kmem_cache *avtab_node_cachep __ro_after_init;
 static struct kmem_cache *avtab_xperms_cachep __ro_after_init;
 
 /* Based on MurmurHash3, written by Austin Appleby and placed in the
@@ -69,17 +68,17 @@ static struct avtab_node *avtab_insert_node(struct avtab *h,
 					    const struct avtab_key *key,
 					    const struct avtab_datum *datum)
 {
+	u32 newnodei;
 	struct avtab_node *newnode;
 	struct avtab_extended_perms *xperms;
-	newnode = kmem_cache_zalloc(avtab_node_cachep, GFP_KERNEL);
-	if (newnode == NULL)
-		return NULL;
+	newnodei = ++h->nel;
+	newnode = avtab_get_node(h, newnodei);
 	newnode->key = *key;
 
 	if (key->specified & AVTAB_XPERMS) {
 		xperms = kmem_cache_zalloc(avtab_xperms_cachep, GFP_KERNEL);
 		if (xperms == NULL) {
-			kmem_cache_free(avtab_node_cachep, newnode);
+			--h->nel;
 			return NULL;
 		}
 		*xperms = *(datum->u.xperms);
@@ -91,7 +90,6 @@ static struct avtab_node *avtab_insert_node(struct avtab *h,
 	newnode->next = *dst;
 	*dst = newnode;
 
-	h->nel++;
 	return newnode;
 }
 
@@ -128,8 +126,8 @@ static int avtab_insert(struct avtab *h, const struct avtab_key *key,
 		return -EINVAL;
 
 	hvalue = avtab_hash(key, h->mask);
-	for (prev = NULL, cur = h->htable[hvalue]; cur;
-	     prev = cur, cur = cur->next) {
+	for (prev = NULL, cur = avtab_get_chain(h, hvalue); cur;
+	     prev = cur, cur = avtab_get_node(h, cur->next)) {
 		cmp = avtab_node_cmp(key, &cur->key);
 		/* extended perms may not be unique */
 		if (cmp == 0 && !(key->specified & AVTAB_XPERMS))
@@ -161,8 +159,8 @@ struct avtab_node *avtab_insert_nonunique(struct avtab *h,
 	if (!h || !h->nslot || h->nel == U32_MAX)
 		return NULL;
 	hvalue = avtab_hash(key, h->mask);
-	for (prev = NULL, cur = h->htable[hvalue]; cur;
-	     prev = cur, cur = cur->next) {
+	for (prev = NULL, cur = avtab_get_chain(h, hvalue); cur;
+	     prev = cur, cur = avtab_get_node(h, cur->next)) {
 		cmp = avtab_node_cmp(key, &cur->key);
 		if (cmp <= 0)
 			break;
@@ -185,7 +183,8 @@ struct avtab_node *avtab_search_node(struct avtab *h,
 		return NULL;
 
 	hvalue = avtab_hash(key, h->mask);
-	for (cur = h->htable[hvalue]; cur; cur = cur->next) {
+	for (cur = avtab_get_chain(h, hvalue); cur;
+	     cur = avtab_get_node(h, cur->next)) {
 		cmp = avtab_node_cmp(key, &cur->key);
 		if (cmp == 0)
 			return cur;
@@ -195,7 +194,8 @@ struct avtab_node *avtab_search_node(struct avtab *h,
 	return NULL;
 }
 
-struct avtab_node *avtab_search_node_next(struct avtab_node *node,
+struct avtab_node *avtab_search_node_next(struct avtab *h,
+					  struct avtab_node *node,
 					  u16 specified)
 {
 	struct avtab_key tmp_key;
@@ -206,7 +206,7 @@ struct avtab_node *avtab_search_node_next(struct avtab_node *node,
 		return NULL;
 	tmp_key = node->key;
 	tmp_key.specified = specified;
-	for (cur = node->next; cur; cur = cur->next) {
+	for (cur = avtab_get_node(h, node->next); cur; cur = avtab_get_node(h, cur->next)) {
 		cmp = avtab_node_cmp(&tmp_key, &cur->key);
 		if (cmp == 0)
 			return cur;
@@ -219,24 +219,24 @@ struct avtab_node *avtab_search_node_next(struct avtab_node *node,
 void avtab_destroy(struct avtab *h)
 {
 	u32 i;
-	struct avtab_node *cur, *temp;
+	struct avtab_node *cur;
 
 	if (!h)
 		return;
 
 	for (i = 0; i < h->nslot; i++) {
-		cur = h->htable[i];
+		cur = avtab_get_chain(h, i);
 		while (cur) {
-			temp = cur;
-			cur = cur->next;
-			if (temp->key.specified & AVTAB_XPERMS)
+			if (cur->key.specified & AVTAB_XPERMS)
 				kmem_cache_free(avtab_xperms_cachep,
-						temp->datum.u.xperms);
-			kmem_cache_free(avtab_node_cachep, temp);
+						cur->datum.u.xperms);
+			cur = avtab_get_node(h, cur->next);
 		}
 	}
 	kvfree(h->htable);
+	kvfree(h->nodes);
 	h->htable = NULL;
+	h->nodes = NULL;
 	h->nel = 0;
 	h->nslot = 0;
 	h->mask = 0;
@@ -245,20 +245,26 @@ void avtab_destroy(struct avtab *h)
 void avtab_init(struct avtab *h)
 {
 	h->htable = NULL;
+	h->nodes = NULL;
 	h->nel = 0;
 	h->nslot = 0;
 	h->mask = 0;
 }
 
-static int avtab_alloc_common(struct avtab *h, u32 nslot)
+static int avtab_alloc_common(struct avtab *h, u32 nslot, u32 nrules)
 {
 	if (!nslot)
 		return 0;
 
-	h->htable = kvcalloc(nslot, sizeof(void *), GFP_KERNEL);
+	h->htable = kvcalloc(nslot, sizeof(u32), GFP_KERNEL);
 	if (!h->htable)
 		return -ENOMEM;
-
+	h->nodes = kvcalloc(nrules, sizeof(struct avtab_node), GFP_KERNEL);
+	if (!h->nodes) {
+		kvfree(h->htable);
+		h->htable = NULL;
+		return -ENOMEM;
+	}
 	h->nslot = nslot;
 	h->mask = nslot - 1;
 	return 0;
@@ -274,7 +280,7 @@ int avtab_alloc(struct avtab *h, u32 nrules)
 		if (nslot > MAX_AVTAB_HASH_BUCKETS)
 			nslot = MAX_AVTAB_HASH_BUCKETS;
 
-		rc = avtab_alloc_common(h, nslot);
+		rc = avtab_alloc_common(h, nslot, nrules);
 		if (rc)
 			return rc;
 	}
@@ -285,7 +291,7 @@ int avtab_alloc(struct avtab *h, u32 nrules)
 
 int avtab_alloc_dup(struct avtab *new, const struct avtab *orig)
 {
-	return avtab_alloc_common(new, orig->nslot);
+	return avtab_alloc_common(new, orig->nslot, orig->nel);
 }
 
 #ifdef CONFIG_SECURITY_SELINUX_DEBUG
@@ -299,13 +305,13 @@ void avtab_hash_eval(struct avtab *h, const char *tag)
 	max_chain_len = 0;
 	chain2_len_sum = 0;
 	for (i = 0; i < h->nslot; i++) {
-		cur = h->htable[i];
+		cur = avtab_get_chain(h, i);
 		if (cur) {
 			slots_used++;
 			chain_len = 0;
 			while (cur) {
 				chain_len++;
-				cur = cur->next;
+				cur = avtab_get_node(h, cur->next);
 			}
 
 			if (chain_len > max_chain_len)
@@ -599,7 +605,8 @@ int avtab_write(struct policydb *p, struct avtab *a, struct policy_file *fp)
 		return rc;
 
 	for (i = 0; i < a->nslot; i++) {
-		for (cur = a->htable[i]; cur; cur = cur->next) {
+		for (cur = avtab_get_chain(a, i); cur;
+		     cur = avtab_get_node(a, cur->next)) {
 			rc = avtab_write_item(p, cur, fp);
 			if (rc)
 				return rc;
@@ -611,6 +618,6 @@ int avtab_write(struct policydb *p, struct avtab *a, struct policy_file *fp)
 
 void __init avtab_cache_init(void)
 {
-	avtab_node_cachep = KMEM_CACHE(avtab_node, SLAB_PANIC);
+
 	avtab_xperms_cachep = KMEM_CACHE(avtab_extended_perms, SLAB_PANIC);
 }

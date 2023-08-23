@@ -257,6 +257,7 @@ static int cond_insertf(struct avtab *a, const struct avtab_key *k,
 	struct cond_insertf_data *data = ptr;
 	struct policydb *p = data->p;
 	struct cond_av_list *other = data->other;
+	struct avtab *cond_avtab = &p->te_cond_avtab;
 	struct avtab_node *node_ptr;
 	u32 i;
 	bool found;
@@ -280,9 +281,10 @@ static int cond_insertf(struct avtab *a, const struct avtab_key *k,
 		 * be any other entries.
 		 */
 		if (other) {
-			node_ptr = avtab_search_node(&p->te_cond_avtab, k);
+			node_ptr = avtab_search_node(cond_avtab, k);
 			if (node_ptr) {
-				if (avtab_search_node_next(node_ptr,
+				if (avtab_search_node_next(cond_avtab,
+							   node_ptr,
 							   k->specified)) {
 					pr_err("SELinux: too many conflicting type rules.\n");
 					return -EINVAL;
@@ -300,14 +302,14 @@ static int cond_insertf(struct avtab *a, const struct avtab_key *k,
 				}
 			}
 		} else {
-			if (avtab_search_node(&p->te_cond_avtab, k)) {
+			if (avtab_search_node(cond_avtab, k)) {
 				pr_err("SELinux: conflicting type rules when adding type rule for true.\n");
 				return -EINVAL;
 			}
 		}
 	}
 
-	node_ptr = avtab_insert_nonunique(&p->te_cond_avtab, k, d);
+	node_ptr = avtab_insert_nonunique(cond_avtab, k, d);
 	if (!node_ptr) {
 		pr_err("SELinux: could not insert rule.\n");
 		return -ENOMEM;
@@ -559,7 +561,7 @@ void cond_compute_xperms(struct avtab *ctab, struct avtab_key *key,
 		return;
 
 	for (node = avtab_search_node(ctab, key); node;
-	     node = avtab_search_node_next(node, key->specified)) {
+	     node = avtab_search_node_next(ctab, node, key->specified)) {
 		if (node->key.specified & AVTAB_ENABLED)
 			services_compute_xperms_decision(xpermd, node);
 	}
@@ -576,7 +578,7 @@ void cond_compute_av(struct avtab *ctab, struct avtab_key *key,
 		return;
 
 	for (node = avtab_search_node(ctab, key); node;
-	     node = avtab_search_node_next(node, key->specified)) {
+	     node = avtab_search_node_next(ctab, node, key->specified)) {
 		if ((u16)(AVTAB_ALLOWED | AVTAB_ENABLED) ==
 		    (node->key.specified & (AVTAB_ALLOWED | AVTAB_ENABLED)))
 			avd->allowed |= node->datum.u.data;

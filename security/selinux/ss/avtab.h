@@ -78,15 +78,37 @@ struct avtab_datum {
 struct avtab_node {
 	struct avtab_key key;
 	struct avtab_datum datum;
-	struct avtab_node *next;
+	u32 next;
 };
 
 struct avtab {
-	struct avtab_node **htable;
+	u32 *htable;
+	struct avtab_node *nodes;
 	u32 nel; /* number of elements */
 	u32 nslot; /* number of hash slots */
 	u32 mask; /* mask to compute hash func */
 };
+
+/* sentinel value to signal an empty node */
+#define NULL_NODE_IDX		(0)
+/* compute the actual index into the nodes array */
+#define NODES_ARRAY_IDX(idx)	((idx) - 1)
+
+static inline struct avtab_node *avtab_get_chain(struct avtab *h, u32 slot)
+{
+	u32 chain_start = h->htable[slot];
+
+	if (chain_start != NULL_NODE_IDX)
+		return &h->nodes[NODES_ARRAY_IDX(chain_start)];
+	return NULL;
+}
+
+static inline struct avtab_node *avtab_get_node(struct avtab *h, u32 idx)
+{
+	if (idx != NULL_NODE_IDX)
+		return &h->nodes[NODES_ARRAY_IDX(idx)];
+	return NULL;
+}
 
 void avtab_init(struct avtab *h);
 int avtab_alloc(struct avtab *h, u32 nrules);
@@ -122,7 +144,8 @@ struct avtab_node *avtab_insert_nonunique(struct avtab *h,
 
 struct avtab_node *avtab_search_node(struct avtab *h,
 				     const struct avtab_key *key);
-struct avtab_node *avtab_search_node_next(struct avtab_node *node,
+struct avtab_node *avtab_search_node_next(struct avtab *h,
+					  struct avtab_node *node,
 					  u16 specified);
 
 #endif /* _SS_AVTAB_H_ */

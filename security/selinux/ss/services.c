@@ -628,6 +628,7 @@ static void context_struct_compute_av(struct policydb *policydb,
 {
 	struct constraint_node *constraint;
 	struct role_allow *ra;
+	struct avtab *avtab;
 	struct avtab_key avkey;
 	struct avtab_node *node;
 	struct class_datum *tclass_datum;
@@ -653,6 +654,7 @@ static void context_struct_compute_av(struct policydb *policydb,
 	 * If a specific type enforcement rule was defined for
 	 * this permission check, then use it.
 	 */
+	avtab = &policydb->te_avtab;
 	avkey.target_class = tclass;
 	avkey.specified = AVTAB_AV | AVTAB_XPERMS;
 	sattr = &policydb->type_attr_map_array[scontext->type - 1];
@@ -661,10 +663,9 @@ static void context_struct_compute_av(struct policydb *policydb,
 		ebitmap_for_each_positive_bit(tattr, tnode, j) {
 			avkey.source_type = i + 1;
 			avkey.target_type = j + 1;
-			for (node = avtab_search_node(&policydb->te_avtab,
-						      &avkey);
+			for (node = avtab_search_node(avtab, &avkey);
 			     node;
-			     node = avtab_search_node_next(node, avkey.specified)) {
+			     node = avtab_search_node_next(avtab, node, avkey.specified)) {
 				if (node->key.specified == AVTAB_ALLOWED)
 					avd->allowed |= node->datum.u.data;
 				else if (node->key.specified == AVTAB_AUDITALLOW)
@@ -1035,6 +1036,7 @@ void security_compute_xperms_decision(u32 ssid,
 	struct sidtab *sidtab;
 	u16 tclass;
 	struct context *scontext, *tcontext;
+	struct avtab *avtab;
 	struct avtab_key avkey;
 	struct avtab_node *node;
 	struct ebitmap *sattr, *tattr;
@@ -1083,6 +1085,7 @@ void security_compute_xperms_decision(u32 ssid,
 		goto out;
 	}
 
+	avtab = &policydb->te_avtab;
 	avkey.target_class = tclass;
 	avkey.specified = AVTAB_XPERMS;
 	sattr = &policydb->type_attr_map_array[scontext->type - 1];
@@ -1091,10 +1094,9 @@ void security_compute_xperms_decision(u32 ssid,
 		ebitmap_for_each_positive_bit(tattr, tnode, j) {
 			avkey.source_type = i + 1;
 			avkey.target_type = j + 1;
-			for (node = avtab_search_node(&policydb->te_avtab,
-						      &avkey);
+			for (node = avtab_search_node(avtab, &avkey);
 			     node;
-			     node = avtab_search_node_next(node, avkey.specified))
+			     node = avtab_search_node_next(avtab, node, avkey.specified))
 				services_compute_xperms_decision(xpermd, node);
 
 			cond_compute_xperms(&policydb->te_cond_avtab,
@@ -1744,6 +1746,7 @@ static int security_compute_sid(u32 ssid,
 	struct class_datum *cladatum;
 	struct context *scontext, *tcontext, newcontext;
 	struct sidtab_entry *sentry, *tentry;
+	struct avtab *cond_avtab;
 	struct avtab_key avkey;
 	struct avtab_node *avnode, *node;
 	u16 tclass;
@@ -1836,6 +1839,7 @@ retry:
 	/* Set the type.
 	 * Look for a type transition/member/change rule.
 	 */
+	cond_avtab = &policydb->te_cond_avtab;
 	avkey.source_type = scontext->type;
 	avkey.target_type = tcontext->type;
 	avkey.target_class = tclass;
@@ -1844,8 +1848,8 @@ retry:
 
 	/* If no permanent rule, also check for enabled conditional rules */
 	if (!avnode) {
-		node = avtab_search_node(&policydb->te_cond_avtab, &avkey);
-		for (; node; node = avtab_search_node_next(node, specified)) {
+		node = avtab_search_node(cond_avtab, &avkey);
+		for (; node; node = avtab_search_node_next(cond_avtab, node, specified)) {
 			if (node->key.specified & AVTAB_ENABLED) {
 				avnode = node;
 				break;
