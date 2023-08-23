@@ -90,10 +90,12 @@ static int cond_evaluate_expr(struct policydb *p, struct cond_expr *expr)
  */
 static void evaluate_cond_node(struct policydb *p, struct cond_node *node)
 {
+	struct avtab *cond_avtab;
 	struct avtab_node *avnode;
 	int new_state;
 	u32 i;
 
+	cond_avtab = &p->te_cond_avtab;
 	new_state = cond_evaluate_expr(p, &node->expr);
 	if (new_state != node->cur_state) {
 		node->cur_state = new_state;
@@ -101,7 +103,7 @@ static void evaluate_cond_node(struct policydb *p, struct cond_node *node)
 			pr_err("SELinux: expression result was undefined - disabling all rules.\n");
 		/* turn the rules on or off */
 		for (i = 0; i < node->true_list.len; i++) {
-			avnode = node->true_list.nodes[i];
+			avnode = avtab_get_node(cond_avtab, node->true_list.nodes[i]);
 			if (new_state <= 0)
 				avnode->key.specified &= ~AVTAB_ENABLED;
 			else
@@ -109,7 +111,7 @@ static void evaluate_cond_node(struct policydb *p, struct cond_node *node)
 		}
 
 		for (i = 0; i < node->false_list.len; i++) {
-			avnode = node->false_list.nodes[i];
+			avnode = avtab_get_node(cond_avtab, node->false_list.nodes[i]);
 			/* -1 or 1 */
 			if (new_state)
 				avnode->key.specified &= ~AVTAB_ENABLED;
@@ -139,7 +141,7 @@ void cond_policydb_init(struct policydb *p)
 static void cond_node_destroy(struct cond_node *node)
 {
 	kfree(node->expr.nodes);
-	/* the avtab_ptr_t nodes are destroyed by the avtab */
+	/* the actual nodes were destroyed by avtab_destroy() */
 	kfree(node->true_list.nodes);
 	kfree(node->false_list.nodes);
 }
@@ -247,7 +249,7 @@ err:
 
 struct cond_insertf_data {
 	struct policydb *p;
-	struct avtab_node **dst;
+	u32 *dst;
 	struct cond_av_list *other;
 };
 
@@ -258,8 +260,8 @@ static int cond_insertf(struct avtab *a, const struct avtab_key *k,
 	struct policydb *p = data->p;
 	struct cond_av_list *other = data->other;
 	struct avtab *cond_avtab = &p->te_cond_avtab;
-	struct avtab_node *node_ptr;
-	u32 i;
+	struct avtab_node *node_ptr, *other_node_ptr;
+	u32 i, node_idx;
 	bool found;
 
 	/*
@@ -291,7 +293,9 @@ static int cond_insertf(struct avtab *a, const struct avtab_key *k,
 				}
 				found = false;
 				for (i = 0; i < other->len; i++) {
-					if (other->nodes[i] == node_ptr) {
+					other_node_ptr = avtab_get_node(cond_avtab,
+									other->nodes[i]);
+					if (other_node_ptr == node_ptr) {
 						found = true;
 						break;
 					}
@@ -309,13 +313,13 @@ static int cond_insertf(struct avtab *a, const struct avtab_key *k,
 		}
 	}
 
-	node_ptr = avtab_insert_nonunique(cond_avtab, k, d);
-	if (!node_ptr) {
+	node_idx = avtab_insert_nonunique(cond_avtab, k, d);
+	if (node_idx == NULL_NODE_IDX) {
 		pr_err("SELinux: could not insert rule.\n");
 		return -ENOMEM;
 	}
 
-	*data->dst = node_ptr;
+	*data->dst = node_idx;
 	return 0;
 }
 
@@ -438,6 +442,9 @@ int cond_read_list(struct policydb *p, struct policy_file *fp)
 		if (rc)
 			goto err;
 	}
+	rc = avtab_shrink_nodes(&p->te_cond_avtab);
+	if (rc)
+		goto err;
 	return 0;
 err:
 	cond_list_destroy(p);
@@ -480,6 +487,7 @@ static int cond_write_av_list(struct policydb *p, struct cond_av_list *list,
 			      struct policy_file *fp)
 {
 	__le32 buf[1];
+	struct avtab_node *node;
 	u32 i;
 	int rc;
 
@@ -489,7 +497,8 @@ static int cond_write_av_list(struct policydb *p, struct cond_av_list *list,
 		return rc;
 
 	for (i = 0; i < list->len; i++) {
-		rc = avtab_write_item(p, list->nodes[i], fp);
+		node = avtab_get_node(&p->te_cond_avtab, list->nodes[i]);
+		rc = avtab_write_item(p, node, fp);
 		if (rc)
 			return rc;
 	}
@@ -601,8 +610,10 @@ void cond_compute_av(struct avtab *ctab, struct avtab_key *key,
 
 static int cond_dup_av_list(struct cond_av_list *new,
 			    const struct cond_av_list *orig,
-			    struct avtab *avtab)
+			    struct avtab *new_avtab,
+			    struct avtab *orig_avtab)
 {
+	struct avtab_node *orig_node;
 	u32 i;
 
 	memset(new, 0, sizeof(*new));
@@ -612,8 +623,9 @@ static int cond_dup_av_list(struct cond_av_list *new,
 		return -ENOMEM;
 
 	for (i = 0; i < orig->len; i++) {
+		orig_node = avtab_get_node(orig_avtab, orig->nodes[i]);
 		new->nodes[i] = avtab_insert_nonunique(
-			avtab, &orig->nodes[i]->key, &orig->nodes[i]->datum);
+			new_avtab, &orig_node->key, &orig_node->datum);
 		if (!new->nodes[i])
 			return -ENOMEM;
 		new->len++;
@@ -655,12 +667,14 @@ static int duplicate_policydb_cond_list(struct policydb *newp,
 		newn->expr.len = orign->expr.len;
 
 		rc = cond_dup_av_list(&newn->true_list, &orign->true_list,
-				      &newp->te_cond_avtab);
+				      &newp->te_cond_avtab,
+				      &origp->te_cond_avtab);
 		if (rc)
 			goto error;
 
 		rc = cond_dup_av_list(&newn->false_list, &orign->false_list,
-				      &newp->te_cond_avtab);
+				      &newp->te_cond_avtab,
+				      &origp->te_cond_avtab);
 		if (rc)
 			goto error;
 	}

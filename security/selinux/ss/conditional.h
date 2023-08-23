@@ -42,7 +42,7 @@ struct cond_expr {
  * struct is for that list.
  */
 struct cond_av_list {
-	struct avtab_node **nodes;
+	u32 *nodes;
 	u32 len;
 };
 

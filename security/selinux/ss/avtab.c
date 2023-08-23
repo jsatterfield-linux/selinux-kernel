@@ -63,14 +63,17 @@ static inline u32 avtab_hash(const struct avtab_key *keyp, u32 mask)
 	return hash & mask;
 }
 
-static struct avtab_node *avtab_insert_node(struct avtab *h,
-					    struct avtab_node **dst,
-					    const struct avtab_key *key,
-					    const struct avtab_datum *datum)
+static int avtab_grow_nodes(struct avtab *h);
+
+static u32 avtab_insert_node(struct avtab *h, struct avtab_node **dst,
+		  	     const struct avtab_key *key,
+			     const struct avtab_datum *datum)
 {
 	u32 newnodei;
 	struct avtab_node *newnode;
 	struct avtab_extended_perms *xperms;
+	if (unlikely(h->nel == h->nnodes) && avtab_grow_nodes(h) != 0)
+		return NULL_NODE_IDX;
 	newnodei = ++h->nel;
 	newnode = avtab_get_node(h, newnodei);
 	newnode->key = *key;
@@ -79,7 +82,7 @@ static struct avtab_node *avtab_insert_node(struct avtab *h,
 		xperms = kmem_cache_zalloc(avtab_xperms_cachep, GFP_KERNEL);
 		if (xperms == NULL) {
 			--h->nel;
-			return NULL;
+			return NULL_NODE_IDX;
 		}
 		*xperms = *(datum->u.xperms);
 		newnode->datum.u.xperms = xperms;
@@ -90,7 +93,7 @@ static struct avtab_node *avtab_insert_node(struct avtab *h,
 	newnode->next = *dst;
 	*dst = newnode;
 
-	return newnode;
+	return newnodei;
 }
 
 static int avtab_node_cmp(const struct avtab_key *key1,
@@ -118,9 +121,10 @@ static int avtab_node_cmp(const struct avtab_key *key1,
 static int avtab_insert(struct avtab *h, const struct avtab_key *key,
 			const struct avtab_datum *datum)
 {
-	u32 hvalue;
-	struct avtab_node *prev, *cur, *newnode;
+	u32 hvalue, newnodei;
+	struct avtab_node *prev, *cur;
 	int cmp;
+	u16 specified = key->specified & ~(AVTAB_ENABLED|AVTAB_ENABLED_OLD);
 
 	if (!h || !h->nslot || h->nel == U32_MAX)
 		return -EINVAL;
@@ -136,9 +140,9 @@ static int avtab_insert(struct avtab *h, const struct avtab_key *key,
 			break;
 	}
 
-	newnode = avtab_insert_node(h, prev ? &prev->next : &h->htable[hvalue],
-				    key, datum);
-	if (!newnode)
+	newnodei = avtab_insert_node(h, prev ? &prev->next : &h->htable[hvalue],
+				     key, datum);
+	if (newnodei == NULL_NODE_IDX)
 		return -ENOMEM;
 
 	return 0;
@@ -146,18 +150,18 @@ static int avtab_insert(struct avtab *h, const struct avtab_key *key,
 
 /* Unlike avtab_insert(), this function allow multiple insertions of the same
  * key/specified mask into the table, as needed by the conditional avtab.
- * It also returns a pointer to the node inserted.
+ * It returns the index of the node inserted.
  */
-struct avtab_node *avtab_insert_nonunique(struct avtab *h,
-					  const struct avtab_key *key,
-					  const struct avtab_datum *datum)
+u32 avtab_insert_nonunique(struct avtab *h,
+			   const struct avtab_key *key,
+			   const struct avtab_datum *datum)
 {
 	u32 hvalue;
 	struct avtab_node *prev, *cur;
 	int cmp;
 
 	if (!h || !h->nslot || h->nel == U32_MAX)
-		return NULL;
+		return NULL_NODE_IDX;
 	hvalue = avtab_hash(key, h->mask);
 	for (prev = NULL, cur = avtab_get_chain(h, hvalue); cur;
 	     prev = cur, cur = avtab_get_node(h, cur->next)) {
@@ -237,6 +241,7 @@ void avtab_destroy(struct avtab *h)
 	kvfree(h->nodes);
 	h->htable = NULL;
 	h->nodes = NULL;
+	h->nnodes = 0;
 	h->nel = 0;
 	h->nslot = 0;
 	h->mask = 0;
@@ -246,6 +251,7 @@ void avtab_init(struct avtab *h)
 {
 	h->htable = NULL;
 	h->nodes = NULL;
+	h->nnodes = 0;
 	h->nel = 0;
 	h->nslot = 0;
 	h->mask = 0;
@@ -265,6 +271,7 @@ static int avtab_alloc_common(struct avtab *h, u32 nslot, u32 nrules)
 		h->htable = NULL;
 		return -ENOMEM;
 	}
+	h->nnodes = nrules;
 	h->nslot = nslot;
 	h->mask = nslot - 1;
 	return 0;
@@ -292,6 +299,36 @@ int avtab_alloc(struct avtab *h, u32 nrules)
 int avtab_alloc_dup(struct avtab *new, const struct avtab *orig)
 {
 	return avtab_alloc_common(new, orig->nslot, orig->nel);
+}
+
+static int avtab_change_nodes_size(struct avtab *h, u32 nnodes)
+{
+	struct avtab_node *new_nodes;
+
+	if (!h->nodes)
+		return -EINVAL;
+
+	new_nodes = kvcalloc(nnodes, sizeof(*h->nodes), GFP_KERNEL);
+	if (!new_nodes)
+		return -ENOMEM;
+
+	if (h->nel)
+		memcpy(new_nodes, h->nodes, sizeof(*h->nodes) * h->nel);
+
+	kvfree(h->nodes);
+	h->nodes = new_nodes;
+	h->nnodes = nnodes;
+	return 0;
+}
+
+static int avtab_grow_nodes(struct avtab *h)
+{
+	return avtab_change_nodes_size(h, h->nnodes + 1024);
+}
+
+int avtab_shrink_nodes(struct avtab *h)
+{
+	return avtab_change_nodes_size(h, h->nel);
 }
 
 #ifdef CONFIG_SECURITY_SELINUX_DEBUG

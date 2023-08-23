@@ -84,6 +84,7 @@ struct avtab_node {
 struct avtab {
 	u32 *htable;
 	struct avtab_node *nodes;
+	u32 nnodes; /* number of nodes */
 	u32 nel; /* number of elements */
 	u32 nslot; /* number of hash slots */
 	u32 mask; /* mask to compute hash func */
@@ -113,6 +114,7 @@ static inline struct avtab_node *avtab_get_node(struct avtab *h, u32 idx)
 void avtab_init(struct avtab *h);
 int avtab_alloc(struct avtab *h, u32 nrules);
 int avtab_alloc_dup(struct avtab *new, const struct avtab *orig);
+int avtab_shrink_nodes(struct avtab *h);
 void avtab_destroy(struct avtab *h);
 
 #define MAX_AVTAB_HASH_BITS    16
@@ -138,9 +140,9 @@ int avtab_write_item(struct policydb *p, const struct avtab_node *cur,
 		     struct policy_file *fp);
 int avtab_write(struct policydb *p, struct avtab *a, struct policy_file *fp);
 
-struct avtab_node *avtab_insert_nonunique(struct avtab *h,
-					  const struct avtab_key *key,
-					  const struct avtab_datum *datum);
+u32 avtab_insert_nonunique(struct avtab *h,
+			   const struct avtab_key *key,
+			   const struct avtab_datum *datum);
 
 struct avtab_node *avtab_search_node(struct avtab *h,
 				     const struct avtab_key *key);
