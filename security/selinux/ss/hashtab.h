@@ -26,11 +26,13 @@ struct hashtab_key_params {
 struct hashtab_node {
 	void *key;
 	void *datum;
-	struct hashtab_node *next;
+	u32 next;
 };
 
 struct hashtab {
-	struct hashtab_node **htable; /* hash table */
+	u32 *htable; /* hash table */
+	struct hashtab_node *nodes; /* node array */
+	u32 nnodes; /* number of nodes */
 	u32 size; /* number of slots in hash table */
 	u32 nel; /* number of elements in hash table */
 };
@@ -41,6 +43,29 @@ struct hashtab_info {
 	u64 chain2_len_sum;
 };
 
+/* sentinel value to signal an empty node */
+#define NULL_NODE_IDX		(0)
+/* compute the actual index into the nodes array */
+#define NODES_ARRAY_IDX(idx)	((idx) - 1)
+
+static inline struct hashtab_node *hashtab_get_chain(struct hashtab *h,
+						     u32 slot)
+{
+	u32 chain_start = h->htable[slot];
+
+	if (chain_start != NULL_NODE_IDX)
+		return &h->nodes[NODES_ARRAY_IDX(chain_start)];
+	return NULL;
+}
+
+static inline struct hashtab_node *hashtab_get_node(struct hashtab *h,
+						    u32 idx)
+{
+	if (idx != NULL_NODE_IDX)
+		return &h->nodes[NODES_ARRAY_IDX(idx)];
+	return NULL;
+}
+
 /*
  * Initializes a new hash table with the specified characteristics.
  *
@@ -48,8 +73,7 @@ struct hashtab_info {
  */
 int hashtab_init(struct hashtab *h, u32 nel_hint);
 
-int __hashtab_insert(struct hashtab *h, struct hashtab_node **dst, void *key,
-		     void *datum);
+int __hashtab_insert(struct hashtab *h, u32 *dst, void *key, void *datum);
 
 /*
  * Inserts the specified (key, datum) pair into the specified hash table.
@@ -72,7 +96,7 @@ static inline int hashtab_insert(struct hashtab *h, void *key, void *datum,
 
 	hvalue = key_params.hash(key) & (h->size - 1);
 	prev = NULL;
-	cur = h->htable[hvalue];
+	cur = hashtab_get_chain(h, hvalue);
 	while (cur) {
 		int cmp = key_params.cmp(key, cur->key);
 
@@ -81,7 +105,7 @@ static inline int hashtab_insert(struct hashtab *h, void *key, void *datum,
 		if (cmp < 0)
 			break;
 		prev = cur;
-		cur = cur->next;
+		cur = hashtab_get_node(h, cur->next);
 	}
 
 	return __hashtab_insert(h, prev ? &prev->next : &h->htable[hvalue], key,
@@ -104,7 +128,7 @@ static inline void *hashtab_search(struct hashtab *h, const void *key,
 		return NULL;
 
 	hvalue = key_params.hash(key) & (h->size - 1);
-	cur = h->htable[hvalue];
+	cur = hashtab_get_chain(h, hvalue);
 	while (cur) {
 		int cmp = key_params.cmp(key, cur->key);
 
@@ -112,7 +136,7 @@ static inline void *hashtab_search(struct hashtab *h, const void *key,
 			return cur->datum;
 		if (cmp < 0)
 			break;
-		cur = cur->next;
+		cur = hashtab_get_node(h, cur->next);
 	}
 	return NULL;
 }

@@ -11,8 +11,6 @@
 #include "hashtab.h"
 #include "security.h"
 
-static struct kmem_cache *hashtab_node_cachep __ro_after_init;
-
 /*
  * Here we simply round the number of elements up to the nearest power of two.
  * I tried also other options like rounding down or rounding to the closest
@@ -42,46 +40,42 @@ int hashtab_init(struct hashtab *h, u32 nel_hint)
 	if (size) {
 		h->htable = kcalloc(size, sizeof(*h->htable), GFP_KERNEL);
 		if (!h->htable)
-			return -ENOMEM;
+			goto err;
+		h->nodes = kcalloc(nel_hint, sizeof(*h->nodes), GFP_KERNEL);
+		if (!h->nodes)
+			goto htable;
 		h->size = size;
+		h->nnodes = nel_hint;
 	}
 	return 0;
+htable:
+	kfree(h->htable);
+	h->htable = NULL;
+err:
+	return -ENOMEM;
 }
 
-int __hashtab_insert(struct hashtab *h, struct hashtab_node **dst, void *key,
-		     void *datum)
+int __hashtab_insert(struct hashtab *h, u32 *dst, void *key, void *datum)
 {
+	u32 newnodei;
 	struct hashtab_node *newnode;
 
-	newnode = kmem_cache_zalloc(hashtab_node_cachep, GFP_KERNEL);
-	if (!newnode)
-		return -ENOMEM;
+	newnodei = ++h->nel;
+	newnode = hashtab_get_node(h, newnodei);
+
 	newnode->key = key;
 	newnode->datum = datum;
 	newnode->next = *dst;
-	*dst = newnode;
+	*dst = newnodei;
 
-	h->nel++;
 	return 0;
 }
 
 void hashtab_destroy(struct hashtab *h)
 {
-	u32 i;
-	struct hashtab_node *cur, *temp;
-
-	for (i = 0; i < h->size; i++) {
-		cur = h->htable[i];
-		while (cur) {
-			temp = cur;
-			cur = cur->next;
-			kmem_cache_free(hashtab_node_cachep, temp);
-		}
-		h->htable[i] = NULL;
-	}
-
+	kfree(h->nodes);
 	kfree(h->htable);
-	h->htable = NULL;
+	memset(h, 0, sizeof(*h));
 }
 
 int hashtab_map(struct hashtab *h, int (*apply)(void *k, void *d, void *args),
@@ -92,12 +86,12 @@ int hashtab_map(struct hashtab *h, int (*apply)(void *k, void *d, void *args),
 	struct hashtab_node *cur;
 
 	for (i = 0; i < h->size; i++) {
-		cur = h->htable[i];
+		cur = hashtab_get_chain(h, i);
 		while (cur) {
 			ret = apply(cur->key, cur->datum, args);
 			if (ret)
 				return ret;
-			cur = cur->next;
+			cur = hashtab_get_node(h, cur->next);
 		}
 	}
 	return 0;
@@ -114,13 +108,13 @@ void hashtab_stat(struct hashtab *h, struct hashtab_info *info)
 	max_chain_len = 0;
 	chain2_len_sum = 0;
 	for (i = 0; i < h->size; i++) {
-		cur = h->htable[i];
+		cur = hashtab_get_chain(h, i);
 		if (cur) {
 			slots_used++;
 			chain_len = 0;
 			while (cur) {
 				chain_len++;
-				cur = cur->next;
+				cur = hashtab_get_node(h, cur->next);
 			}
 
 			if (chain_len > max_chain_len)
@@ -141,8 +135,7 @@ int hashtab_duplicate(struct hashtab *new, const struct hashtab *orig,
 				  const struct hashtab_node *orig, void *args),
 		      int (*destroy)(void *k, void *d, void *args), void *args)
 {
-	const struct hashtab_node *orig_cur;
-	struct hashtab_node *cur, *tmp, *tail;
+	struct hashtab_node *cur;
 	u32 i;
 	int rc;
 
@@ -151,48 +144,32 @@ int hashtab_duplicate(struct hashtab *new, const struct hashtab *orig,
 	new->htable = kcalloc(orig->size, sizeof(*new->htable), GFP_KERNEL);
 	if (!new->htable)
 		return -ENOMEM;
+	new->nodes = kcalloc(orig->nnodes, sizeof(*new->nodes), GFP_KERNEL);
+	if (!new->nodes)
+		goto htable;
 
 	new->size = orig->size;
+	new->nnodes = orig->nnodes;
 
-	for (i = 0; i < orig->size; i++) {
-		tail = NULL;
-		for (orig_cur = orig->htable[i]; orig_cur;
-		     orig_cur = orig_cur->next) {
-			tmp = kmem_cache_zalloc(hashtab_node_cachep,
-						GFP_KERNEL);
-			if (!tmp)
-				goto error;
-			rc = copy(tmp, orig_cur, args);
-			if (rc) {
-				kmem_cache_free(hashtab_node_cachep, tmp);
-				goto error;
-			}
-			tmp->next = NULL;
-			if (!tail)
-				new->htable[i] = tmp;
-			else
-				tail->next = tmp;
-			tail = tmp;
-			new->nel++;
-		}
+	memcpy(new->htable, orig->htable, sizeof(*new->htable) * orig->size);
+	memcpy(new->nodes, orig->nodes, sizeof(*new->nodes) * orig->nnodes);
+	for (i = 0; i < orig->nel; i++) {
+		rc = copy(&new->nodes[i], &orig->nodes[i], args);
+		if (rc)
+			goto nodes;
+		new->nel++;
 	}
 
 	return 0;
 
-error:
-	for (i = 0; i < new->size; i++) {
-		for (cur = new->htable[i]; cur; cur = tmp) {
-			tmp = cur->next;
-			destroy(cur->key, cur->datum, args);
-			kmem_cache_free(hashtab_node_cachep, cur);
-		}
+nodes:
+	for (i = 0; i < new->nel; i++) {
+		cur = hashtab_get_node(new, i);
+		destroy(cur->key, cur->datum, args);
 	}
+	kfree(new->nodes);
+htable:
 	kfree(new->htable);
 	memset(new, 0, sizeof(*new));
 	return -ENOMEM;
-}
-
-void __init hashtab_cache_init(void)
-{
-	hashtab_node_cachep = KMEM_CACHE(hashtab_node, SLAB_PANIC);
 }
