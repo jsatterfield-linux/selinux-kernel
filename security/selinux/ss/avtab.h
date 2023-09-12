@@ -128,4 +128,6 @@ struct avtab_node *avtab_search_node(struct avtab *h,
 struct avtab_node *avtab_search_node_next(struct avtab_node *node,
 					  u16 specified);
 
+void avtab_sort_nodes(struct avtab *h);
+
 #endif /* _SS_AVTAB_H_ */
