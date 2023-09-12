@@ -653,6 +653,28 @@ int avtab_write(struct policydb *p, struct avtab *a, struct policy_file *fp)
 	return rc;
 }
 
+void avtab_sort_nodes(struct avtab *h)
+{
+	u32 i, newi;
+	struct avtab_node *cur, *new_cur, *new_nodes;
+
+	new_nodes = kvcalloc(h->nnodes, sizeof(*h->nodes), GFP_KERNEL);
+	newi = 0;
+	for (i = 0; i < h->nslot; i++) {
+		cur = avtab_get_chain(h, i);
+		if (cur)
+			h->htable[i] = newi + 1;
+		for (; cur; cur = avtab_get_node(h, cur->next)) {
+			new_cur = &new_nodes[newi++];
+			*new_cur = *cur;
+			if (cur->next)
+				new_cur->next = newi + 1;
+		}
+	}
+	kvfree(h->nodes);
+	h->nodes = new_nodes;
+}
+
 void __init avtab_cache_init(void)
 {
 

@@ -2600,6 +2600,8 @@ int policydb_read(struct policydb *p, struct policy_file *fp)
 			goto bad;
 	}
 
+	avtab_sort_nodes(&p->te_avtab);
+
 	rc = next_entry(buf, fp, sizeof(u32));
 	if (rc)
 		goto bad;
