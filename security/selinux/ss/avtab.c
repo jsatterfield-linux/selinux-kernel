@@ -24,6 +24,13 @@
 static struct kmem_cache *avtab_node_cachep __ro_after_init;
 static struct kmem_cache *avtab_xperms_cachep __ro_after_init;
 
+#define avtab_chain_for_each(pos, tab, slot) \
+	for (pos = (tab)->htable[slot]; pos; pos = pos->next)
+
+#define avtab_chain_for_each_prev(pos, prev, tab, slot) \
+	for (prev = NULL, pos = (tab)->htable[slot]; pos; \
+	prev = pos, pos = pos->next)
+
 /* Based on MurmurHash3, written by Austin Appleby and placed in the
  * public domain.
  */
@@ -128,8 +135,7 @@ static int avtab_insert(struct avtab *h, const struct avtab_key *key,
 		return -EINVAL;
 
 	hvalue = avtab_hash(key, h->mask);
-	for (prev = NULL, cur = h->htable[hvalue]; cur;
-	     prev = cur, cur = cur->next) {
+	avtab_chain_for_each_prev(cur, prev, h, hvalue) {
 		cmp = avtab_node_cmp(key, &cur->key);
 		/* extended perms may not be unique */
 		if (cmp == 0 && !(key->specified & AVTAB_XPERMS))
@@ -161,8 +167,7 @@ struct avtab_node *avtab_insert_nonunique(struct avtab *h,
 	if (!h || !h->nslot || h->nel == U32_MAX)
 		return NULL;
 	hvalue = avtab_hash(key, h->mask);
-	for (prev = NULL, cur = h->htable[hvalue]; cur;
-	     prev = cur, cur = cur->next) {
+	avtab_chain_for_each_prev(cur, prev, h, hvalue) {
 		cmp = avtab_node_cmp(key, &cur->key);
 		if (cmp <= 0)
 			break;
@@ -177,15 +182,13 @@ struct avtab_node *avtab_insert_nonunique(struct avtab *h,
 struct avtab_node *avtab_search_node(struct avtab *h,
 				     const struct avtab_key *key)
 {
-	u32 hvalue;
 	struct avtab_node *cur;
 	int cmp;
 
 	if (!h || !h->nslot)
 		return NULL;
 
-	hvalue = avtab_hash(key, h->mask);
-	for (cur = h->htable[hvalue]; cur; cur = cur->next) {
+	avtab_chain_for_each(cur, h, avtab_hash(key, h->mask)) {
 		cmp = avtab_node_cmp(key, &cur->key);
 		if (cmp == 0)
 			return cur;
@@ -303,10 +306,8 @@ void avtab_hash_eval(struct avtab *h, const char *tag)
 		if (cur) {
 			slots_used++;
 			chain_len = 0;
-			while (cur) {
+			avtab_chain_for_each(cur, h, i)
 				chain_len++;
-				cur = cur->next;
-			}
 
 			if (chain_len > max_chain_len)
 				max_chain_len = chain_len;
@@ -599,7 +600,7 @@ int avtab_write(struct policydb *p, struct avtab *a, struct policy_file *fp)
 		return rc;
 
 	for (i = 0; i < a->nslot; i++) {
-		for (cur = a->htable[i]; cur; cur = cur->next) {
+		avtab_chain_for_each(cur, a, i) {
 			rc = avtab_write_item(p, cur, fp);
 			if (rc)
 				return rc;
