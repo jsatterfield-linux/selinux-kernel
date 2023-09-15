@@ -21,7 +21,6 @@
 #include "avtab.h"
 #include "policydb.h"
 
-static struct kmem_cache *avtab_node_cachep __ro_after_init;
 static struct kmem_cache *avtab_xperms_cachep __ro_after_init;
 
 /* Based on MurmurHash3, written by Austin Appleby and placed in the
@@ -64,6 +63,8 @@ static inline u32 avtab_hash(const struct avtab_key *keyp, u32 mask)
 	return hash & mask;
 }
 
+static int avtab_grow_nodes(struct avtab *h);
+
 static struct avtab_node *avtab_insert_node(struct avtab *h,
 					    struct avtab_node **dst,
 					    const struct avtab_key *key,
@@ -71,17 +72,15 @@ static struct avtab_node *avtab_insert_node(struct avtab *h,
 {
 	struct avtab_node *newnode;
 	struct avtab_extended_perms *xperms;
-	newnode = kmem_cache_zalloc(avtab_node_cachep, GFP_KERNEL);
-	if (newnode == NULL)
+	if (unlikely(h->nel == h->nnodes) && avtab_grow_nodes(h) != 0)
 		return NULL;
+	newnode = &h->nodes[h->nel];
 	newnode->key = *key;
 
 	if (key->specified & AVTAB_XPERMS) {
 		xperms = kmem_cache_zalloc(avtab_xperms_cachep, GFP_KERNEL);
-		if (xperms == NULL) {
-			kmem_cache_free(avtab_node_cachep, newnode);
+		if (xperms == NULL)
 			return NULL;
-		}
 		*xperms = *(datum->u.xperms);
 		newnode->datum.u.xperms = xperms;
 	} else {
@@ -232,11 +231,13 @@ void avtab_destroy(struct avtab *h)
 			if (temp->key.specified & AVTAB_XPERMS)
 				kmem_cache_free(avtab_xperms_cachep,
 						temp->datum.u.xperms);
-			kmem_cache_free(avtab_node_cachep, temp);
 		}
 	}
 	kvfree(h->htable);
+	kvfree(h->nodes);
 	h->htable = NULL;
+	h->nodes = NULL;
+	h->nnodes = 0;
 	h->nel = 0;
 	h->nslot = 0;
 	h->mask = 0;
@@ -245,20 +246,28 @@ void avtab_destroy(struct avtab *h)
 void avtab_init(struct avtab *h)
 {
 	h->htable = NULL;
+	h->nodes = NULL;
+	h->nnodes = 0;
 	h->nel = 0;
 	h->nslot = 0;
 	h->mask = 0;
 }
 
-static int avtab_alloc_common(struct avtab *h, u32 nslot)
+static int avtab_alloc_common(struct avtab *h, u32 nslot, u32 nrules)
 {
 	if (!nslot)
 		return 0;
 
-	h->htable = kvcalloc(nslot, sizeof(void *), GFP_KERNEL);
+	h->htable = kvcalloc(nslot, sizeof(*h->htable), GFP_KERNEL);
 	if (!h->htable)
 		return -ENOMEM;
-
+	h->nodes = kvcalloc(nrules, sizeof(*h->nodes), GFP_KERNEL);
+	if (!h->nodes) {
+		kvfree(h->htable);
+		h->htable = NULL;
+		return -ENOMEM;
+	}
+	h->nnodes = nrules;
 	h->nslot = nslot;
 	h->mask = nslot - 1;
 	return 0;
@@ -274,7 +283,7 @@ int avtab_alloc(struct avtab *h, u32 nrules)
 		if (nslot > MAX_AVTAB_HASH_BUCKETS)
 			nslot = MAX_AVTAB_HASH_BUCKETS;
 
-		rc = avtab_alloc_common(h, nslot);
+		rc = avtab_alloc_common(h, nslot, nrules);
 		if (rc)
 			return rc;
 	}
@@ -285,7 +294,52 @@ int avtab_alloc(struct avtab *h, u32 nrules)
 
 int avtab_alloc_dup(struct avtab *new, const struct avtab *orig)
 {
-	return avtab_alloc_common(new, orig->nslot);
+	return avtab_alloc_common(new, orig->nslot, orig->nel);
+}
+
+static int avtab_change_nodes_size(struct avtab *h, u32 nnodes)
+{
+	u32 i;
+	struct avtab_node *new_nodes, *cur, *new;
+
+	if (!h->nodes)
+		return -EINVAL;
+
+	new_nodes = kvcalloc(nnodes, sizeof(*h->nodes), GFP_KERNEL);
+	if (!new_nodes)
+		return -ENOMEM;
+
+	if (h->nel) {
+		/* copy data and update pointers to offset from new_nodes */
+		for (i = 0; i < h->nslot; i++) {
+			cur = h->htable[i];
+			if (cur)
+				h->htable[i] = new_nodes + (cur - h->nodes);
+		}
+		for (i = 0; i < h->nel; i++) {
+			cur = &h->nodes[i];
+			new = &new_nodes[i];
+			new->key = cur->key;
+			new->datum = cur->datum;
+			if (cur->next)
+				new_nodes[i].next = new_nodes + (cur->next - h->nodes);
+		}
+	}
+
+	kvfree(h->nodes);
+	h->nodes = new_nodes;
+	h->nnodes = nnodes;
+	return 0;
+}
+
+static int avtab_grow_nodes(struct avtab *h)
+{
+	return avtab_change_nodes_size(h, h->nnodes + 1024);
+}
+
+int avtab_shrink_nodes(struct avtab *h)
+{
+	return avtab_change_nodes_size(h, h->nel);
 }
 
 #ifdef CONFIG_SECURITY_SELINUX_DEBUG
@@ -611,6 +665,5 @@ int avtab_write(struct policydb *p, struct avtab *a, struct policy_file *fp)
 
 void __init avtab_cache_init(void)
 {
-	avtab_node_cachep = KMEM_CACHE(avtab_node, SLAB_PANIC);
 	avtab_xperms_cachep = KMEM_CACHE(avtab_extended_perms, SLAB_PANIC);
 }
