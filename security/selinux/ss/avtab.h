@@ -83,6 +83,8 @@ struct avtab_node {
 
 struct avtab {
 	struct avtab_node **htable;
+	struct avtab_node *nodes;
+	u32 nnodes; /* number of nodes */
 	u32 nel; /* number of elements */
 	u32 nslot; /* number of hash slots */
 	u32 mask; /* mask to compute hash func */
