@@ -319,7 +319,7 @@ static int cond_insertf(struct avtab *a, const struct avtab_key *k,
 
 static int cond_read_av_list(struct policydb *p, struct policy_file *fp,
 			     struct cond_av_list *list,
-			     struct cond_av_list *other)
+			     struct cond_av_list *other, u32 *nrules)
 {
 	int rc;
 	__le32 buf[1];
@@ -343,7 +343,7 @@ static int cond_read_av_list(struct policydb *p, struct policy_file *fp,
 	for (i = 0; i < len; i++) {
 		data.dst = &list->nodes[i];
 		rc = avtab_read_item(&p->te_cond_avtab, fp, p, cond_insertf,
-				     &data, true);
+				     &data, true, nrules);
 		if (rc) {
 			kfree(list->nodes);
 			list->nodes = NULL;
@@ -369,7 +369,8 @@ static int expr_node_isvalid(struct policydb *p, struct cond_expr_node *expr)
 	return 1;
 }
 
-static int cond_read_node(struct policydb *p, struct cond_node *node, struct policy_file *fp)
+static int cond_read_node(struct policydb *p, struct cond_node *node,
+			  struct policy_file *fp, u32 *nrules)
 {
 	__le32 buf[2];
 	u32 i, len;
@@ -403,16 +404,17 @@ static int cond_read_node(struct policydb *p, struct cond_node *node, struct pol
 			return -EINVAL;
 	}
 
-	rc = cond_read_av_list(p, fp, &node->true_list, NULL);
+	rc = cond_read_av_list(p, fp, &node->true_list, NULL, nrules);
 	if (rc)
 		return rc;
-	return cond_read_av_list(p, fp, &node->false_list, &node->true_list);
+	return cond_read_av_list(p, fp, &node->false_list, &node->true_list, nrules);
 }
 
 int cond_read_list(struct policydb *p, struct policy_file *fp)
 {
 	__le32 buf[1];
-	u32 i, len;
+	struct policy_file tmp_fp;
+	u32 i, len, nrules;
 	int rc;
 
 	rc = next_entry(buf, fp, sizeof(buf));
@@ -424,15 +426,25 @@ int cond_read_list(struct policydb *p, struct policy_file *fp)
 	p->cond_list = kcalloc(len, sizeof(*p->cond_list), GFP_KERNEL);
 	if (!p->cond_list)
 		return -ENOMEM;
+	p->cond_list_len = len;
 
-	rc = avtab_alloc(&(p->te_cond_avtab), p->te_avtab.nel);
+	/* first pass to only calculate the avrule count */
+	tmp_fp = *fp;
+	nrules = 0;
+	for (i = 0; i < p->cond_list_len; i++) {
+		rc = cond_read_node(p, &p->cond_list[i], &tmp_fp, &nrules);
+		if (rc)
+			goto err;
+		cond_node_destroy(&p->cond_list[i]);
+	}
+
+	rc = avtab_alloc(&(p->te_cond_avtab), nrules);
 	if (rc)
 		goto err;
 
-	p->cond_list_len = len;
-
-	for (i = 0; i < len; i++) {
-		rc = cond_read_node(p, &p->cond_list[i], fp);
+	/* second pass to read in the conditional nodes */
+	for (i = 0; i < p->cond_list_len; i++) {
+		rc = cond_read_node(p, &p->cond_list[i], fp, NULL);
 		if (rc)
 			goto err;
 	}
