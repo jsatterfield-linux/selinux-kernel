@@ -339,7 +339,7 @@ static const uint16_t spec_order[] = {
 int avtab_read_item(struct avtab *a, struct policy_file *fp, struct policydb *pol,
 		    int (*insertf)(struct avtab *a, const struct avtab_key *k,
 				   const struct avtab_datum *d, void *p),
-		    void *p, bool conditional)
+		    void *p, bool conditional, u32 *nrules)
 {
 	__le16 buf16[4];
 	u16 enabled;
@@ -411,6 +411,11 @@ int avtab_read_item(struct avtab *a, struct policy_file *fp, struct policydb *po
 			if (val & spec_order[i]) {
 				key.specified = spec_order[i] | enabled;
 				datum.u.data = le32_to_cpu(buf32[items++]);
+				/* first pass of conditional table read */
+				if (nrules) {
+					(*nrules)++;
+					continue;
+				}
 				rc = insertf(a, &key, &datum, p);
 				if (rc)
 					return rc;
@@ -498,6 +503,12 @@ int avtab_read_item(struct avtab *a, struct policy_file *fp, struct policydb *po
 		pr_err("SELinux: avtab: invalid type\n");
 		return -EINVAL;
 	}
+
+	/* first pass of conditional table read */
+	if (nrules) {
+		(*nrules)++;
+		return 0;
+	}
 	return insertf(a, &key, &datum, p);
 }
 
@@ -530,7 +541,7 @@ int avtab_read(struct avtab *a, struct policy_file *fp, struct policydb *pol)
 		goto bad;
 
 	for (i = 0; i < nel; i++) {
-		rc = avtab_read_item(a, fp, pol, avtab_insertf, NULL, false);
+		rc = avtab_read_item(a, fp, pol, avtab_insertf, NULL, false, NULL);
 		if (rc) {
 			if (rc == -ENOMEM)
 				pr_err("SELinux: avtab: out of memory\n");

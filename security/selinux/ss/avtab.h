@@ -109,7 +109,7 @@ struct policy_file;
 int avtab_read_item(struct avtab *a, struct policy_file *fp, struct policydb *pol,
 		    int (*insert)(struct avtab *a, const struct avtab_key *k,
 				  const struct avtab_datum *d, void *p),
-		    void *p, bool conditional);
+		    void *p, bool conditional, u32 *nrules);
 
 int avtab_read(struct avtab *a, struct policy_file *fp, struct policydb *pol);
 int avtab_write_item(struct policydb *p, const struct avtab_node *cur,
