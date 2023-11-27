@@ -364,21 +364,15 @@ int ebitmap_read(struct ebitmap *e, struct policy_file *fp)
 {
 	struct ebitmap_node *n = NULL;
 	u32 mapunit, count, startbit, index, i;
-	__le32 ebitmap_start;
 	u64 map;
 	__le64 mapbits;
-	__le32 buf[3];
 	int rc;
 
 	ebitmap_init(e);
 
-	rc = next_entry(buf, fp, sizeof buf);
+	rc = next_u32_entries(fp, &mapunit, &e->highbit, &count);
 	if (rc < 0)
 		goto out;
-
-	mapunit = le32_to_cpu(buf[0]);
-	e->highbit = le32_to_cpu(buf[1]);
-	count = le32_to_cpu(buf[2]);
 
 	if (mapunit != BITS_PER_U64) {
 		pr_err("SELinux: ebitmap: map size %u does not "
@@ -400,12 +394,11 @@ int ebitmap_read(struct ebitmap *e, struct policy_file *fp)
 		goto bad;
 
 	for (i = 0; i < count; i++) {
-		rc = next_entry(&ebitmap_start, fp, sizeof(u32));
+		rc = next_u32_entries(fp, &startbit);
 		if (rc < 0) {
 			pr_err("SELinux: ebitmap: truncated map\n");
 			goto bad;
 		}
-		startbit = le32_to_cpu(ebitmap_start);
 
 		if (startbit & (mapunit - 1)) {
 			pr_err("SELinux: ebitmap start bit (%u) is "

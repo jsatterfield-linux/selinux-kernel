@@ -17,6 +17,7 @@
 #define _SS_EBITMAP_H_
 
 #include <net/netlabel.h>
+#include "policy_file.h"
 
 #ifdef CONFIG_64BIT
 #define EBITMAP_NODE_SIZE 64

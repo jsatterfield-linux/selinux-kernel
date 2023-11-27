@@ -1144,7 +1144,6 @@ static int common_read(struct policydb *p, struct symtab *s, struct policy_file 
 {
 	char *key = NULL;
 	struct common_datum *comdatum;
-	__le32 buf[4];
 	u32 i, len, nel;
 	int rc;
 
@@ -1152,18 +1151,14 @@ static int common_read(struct policydb *p, struct symtab *s, struct policy_file 
 	if (!comdatum)
 		return -ENOMEM;
 
-	rc = next_entry(buf, fp, sizeof buf);
+	rc = next_u32_entries(fp, &len, &comdatum->value,
+			      &comdatum->permissions.nprim, &nel);
 	if (rc)
 		goto bad;
-
-	len = le32_to_cpu(buf[0]);
-	comdatum->value = le32_to_cpu(buf[1]);
-	nel = le32_to_cpu(buf[3]);
 
 	rc = symtab_init(&comdatum->permissions, nel);
 	if (rc)
 		goto bad;
-	comdatum->permissions.nprim = le32_to_cpu(buf[2]);
 
 	rc = str_read(&key, GFP_KERNEL, fp, len);
 	if (rc)
