@@ -22,6 +22,7 @@
 #define _SS_AVTAB_H_
 
 #include "security.h"
+#include "policy_file.h"
 
 struct avtab_key {
 	u16 source_type; /* source type */

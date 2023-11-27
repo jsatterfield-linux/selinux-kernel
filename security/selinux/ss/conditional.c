@@ -322,15 +322,13 @@ static int cond_read_av_list(struct policydb *p, struct policy_file *fp,
 			     struct cond_av_list *other)
 {
 	int rc;
-	__le32 buf[1];
 	u32 i, len;
 	struct cond_insertf_data data;
 
-	rc = next_entry(buf, fp, sizeof(u32));
+	rc = next_u32_entries(fp, &len);
 	if (rc)
 		return rc;
 
-	len = le32_to_cpu(buf[0]);
 	if (len == 0)
 		return 0;
 
@@ -392,12 +390,9 @@ static int cond_read_node(struct policydb *p, struct cond_node *node, struct pol
 	for (i = 0; i < len; i++) {
 		struct cond_expr_node *expr = &node->expr.nodes[i];
 
-		rc = next_entry(buf, fp, sizeof(u32) * 2);
+		rc = next_u32_entries(fp, &expr->expr_type, &expr->boolean);
 		if (rc)
 			return rc;
-
-		expr->expr_type = le32_to_cpu(buf[0]);
-		expr->boolean = le32_to_cpu(buf[1]);
 
 		if (!expr_node_isvalid(p, expr))
 			return -EINVAL;
@@ -411,15 +406,12 @@ static int cond_read_node(struct policydb *p, struct cond_node *node, struct pol
 
 int cond_read_list(struct policydb *p, struct policy_file *fp)
 {
-	__le32 buf[1];
 	u32 i, len;
 	int rc;
 
-	rc = next_entry(buf, fp, sizeof(buf));
+	rc = next_u32_entries(fp, &len);
 	if (rc)
 		return rc;
-
-	len = le32_to_cpu(buf[0]);
 
 	p->cond_list = kcalloc(len, sizeof(*p->cond_list), GFP_KERNEL);
 	if (!p->cond_list)

@@ -1001,12 +1001,11 @@ static int mls_read_range_helper(struct mls_range *r, struct policy_file *fp)
 	u32 items;
 	int rc;
 
-	rc = next_entry(buf, fp, sizeof(u32));
+	rc = next_u32_entries(fp, &items);
 	if (rc)
 		goto out;
 
 	rc = -EINVAL;
-	items = le32_to_cpu(buf[0]);
 	if (items > ARRAY_SIZE(buf)) {
 		pr_err("SELinux: mls:  range overflow\n");
 		goto out;
@@ -1057,17 +1056,13 @@ out:
 static int context_read_and_validate(struct context *c, struct policydb *p,
 				     struct policy_file *fp)
 {
-	__le32 buf[3];
 	int rc;
 
-	rc = next_entry(buf, fp, sizeof buf);
+	rc = next_u32_entries(fp, &c->user, &c->role, &c->type);
 	if (rc) {
 		pr_err("SELinux: context truncated\n");
 		goto out;
 	}
-	c->user = le32_to_cpu(buf[0]);
-	c->role = le32_to_cpu(buf[1]);
-	c->type = le32_to_cpu(buf[2]);
 	if (p->policyvers >= POLICYDB_VERSION_MLS) {
 		rc = mls_read_range_helper(&c->range, fp);
 		if (rc) {
@@ -1121,19 +1116,15 @@ static int perm_read(struct policydb *p, struct symtab *s, struct policy_file *f
 	char *key = NULL;
 	struct perm_datum *perdatum;
 	int rc;
-	__le32 buf[2];
 	u32 len;
 
 	perdatum = kzalloc(sizeof(*perdatum), GFP_KERNEL);
 	if (!perdatum)
 		return -ENOMEM;
 
-	rc = next_entry(buf, fp, sizeof buf);
+	rc = next_u32_entries(fp, &len, &perdatum->value);
 	if (rc)
 		goto bad;
-
-	len = le32_to_cpu(buf[0]);
-	perdatum->value = le32_to_cpu(buf[1]);
 
 	rc = str_read(&key, GFP_KERNEL, fp, len);
 	if (rc)

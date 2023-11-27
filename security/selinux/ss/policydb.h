@@ -27,6 +27,7 @@
 #include "mls_types.h"
 #include "context.h"
 #include "constraint.h"
+#include "policy_file.h"
 
 /*
  * A datum type is defined for each kind of symbol
@@ -351,17 +352,6 @@ struct policy_data {
 	struct policydb *p;
 	struct policy_file *fp;
 };
-
-static inline int next_entry(void *buf, struct policy_file *fp, size_t bytes)
-{
-	if (bytes > fp->len)
-		return -EINVAL;
-
-	memcpy(buf, fp->data, bytes);
-	fp->data += bytes;
-	fp->len -= bytes;
-	return 0;
-}
 
 static inline int put_entry(const void *buf, size_t bytes, size_t num,
 			    struct policy_file *fp)

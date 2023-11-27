@@ -355,12 +355,11 @@ int avtab_read_item(struct avtab *a, struct policy_file *fp, struct policydb *po
 	memset(&datum, 0, sizeof(struct avtab_datum));
 
 	if (vers < POLICYDB_VERSION_AVTAB) {
-		rc = next_entry(buf32, fp, sizeof(u32));
+		rc = next_u32_entries(fp, &items2);
 		if (rc) {
 			pr_err("SELinux: avtab: truncated entry\n");
 			return rc;
 		}
-		items2 = le32_to_cpu(buf32[0]);
 		if (items2 > ARRAY_SIZE(buf32)) {
 			pr_err("SELinux: avtab: entry overflow\n");
 			return -EINVAL;
@@ -486,12 +485,11 @@ int avtab_read_item(struct avtab *a, struct policy_file *fp, struct policydb *po
 			xperms.perms.p[i] = le32_to_cpu(buf32[i]);
 		datum.u.xperms = &xperms;
 	} else {
-		rc = next_entry(buf32, fp, sizeof(u32));
+		rc = next_u32_entries(fp, &datum.u.data);
 		if (rc) {
 			pr_err("SELinux: avtab: truncated entry\n");
 			return rc;
 		}
-		datum.u.data = le32_to_cpu(*buf32);
 	}
 	if ((key.specified & AVTAB_TYPE) &&
 	    !policydb_type_isvalid(pol, datum.u.data)) {
@@ -510,15 +508,13 @@ static int avtab_insertf(struct avtab *a, const struct avtab_key *k,
 int avtab_read(struct avtab *a, struct policy_file *fp, struct policydb *pol)
 {
 	int rc;
-	__le32 buf[1];
 	u32 nel, i;
 
-	rc = next_entry(buf, fp, sizeof(u32));
+	rc = next_u32_entries(fp, &nel);
 	if (rc < 0) {
 		pr_err("SELinux: avtab: truncated table\n");
 		goto bad;
 	}
-	nel = le32_to_cpu(buf[0]);
 	if (!nel) {
 		pr_err("SELinux: avtab: table is empty\n");
 		rc = -EINVAL;
