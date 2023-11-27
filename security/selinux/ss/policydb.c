@@ -1194,7 +1194,6 @@ static void type_set_init(struct type_set *t)
 
 static int type_set_read(struct type_set *t, struct policy_file *fp)
 {
-	__le32 buf[1];
 	int rc;
 
 	if (ebitmap_read(&t->types, fp))
@@ -1202,10 +1201,9 @@ static int type_set_read(struct type_set *t, struct policy_file *fp)
 	if (ebitmap_read(&t->negset, fp))
 		return -EINVAL;
 
-	rc = next_entry(buf, fp, sizeof(u32));
+	rc = next_u32_entries(fp, &t->flags);
 	if (rc < 0)
 		return -EINVAL;
-	t->flags = le32_to_cpu(buf[0]);
 
 	return 0;
 }
@@ -1215,7 +1213,6 @@ static int read_cons_helper(struct policydb *p, struct constraint_node **nodep,
 {
 	struct constraint_node *c, *lc;
 	struct constraint_expr *e, *le;
-	__le32 buf[3];
 	u32 i, j, nexpr;
 	int rc, depth;
 
@@ -1230,11 +1227,9 @@ static int read_cons_helper(struct policydb *p, struct constraint_node **nodep,
 		else
 			*nodep = c;
 
-		rc = next_entry(buf, fp, (sizeof(u32) * 2));
+		rc = next_u32_entries(fp, &c->permissions, &nexpr);
 		if (rc)
 			return rc;
-		c->permissions = le32_to_cpu(buf[0]);
-		nexpr = le32_to_cpu(buf[1]);
 		le = NULL;
 		depth = -1;
 		for (j = 0; j < nexpr; j++) {
@@ -1247,12 +1242,10 @@ static int read_cons_helper(struct policydb *p, struct constraint_node **nodep,
 			else
 				c->expr = e;
 
-			rc = next_entry(buf, fp, (sizeof(u32) * 3));
+			rc = next_u32_entries(fp, &e->expr_type, &e->attr,
+					      &e->op);
 			if (rc)
 				return rc;
-			e->expr_type = le32_to_cpu(buf[0]);
-			e->attr = le32_to_cpu(buf[1]);
-			e->op = le32_to_cpu(buf[2]);
 
 			switch (e->expr_type) {
 			case CEXPR_NOT:
@@ -1309,7 +1302,7 @@ static int class_read(struct policydb *p, struct symtab *s, struct policy_file *
 {
 	char *key = NULL;
 	struct class_datum *cladatum;
-	__le32 buf[6];
+	__le32 buf[3];
 	u32 i, len, len2, ncons, nel;
 	int rc;
 
@@ -1317,21 +1310,14 @@ static int class_read(struct policydb *p, struct symtab *s, struct policy_file *
 	if (!cladatum)
 		return -ENOMEM;
 
-	rc = next_entry(buf, fp, sizeof(u32) * 6);
+	rc = next_u32_entries(fp, &len, &len2, &cladatum->value,
+			      &cladatum->permissions.nprim, &nel, &ncons);
 	if (rc)
 		goto bad;
-
-	len = le32_to_cpu(buf[0]);
-	len2 = le32_to_cpu(buf[1]);
-	cladatum->value = le32_to_cpu(buf[2]);
-	nel = le32_to_cpu(buf[4]);
 
 	rc = symtab_init(&cladatum->permissions, nel);
 	if (rc)
 		goto bad;
-	cladatum->permissions.nprim = le32_to_cpu(buf[3]);
-
-	ncons = le32_to_cpu(buf[5]);
 
 	rc = str_read(&key, GFP_KERNEL, fp, len);
 	if (rc)
@@ -1365,10 +1351,9 @@ static int class_read(struct policydb *p, struct symtab *s, struct policy_file *
 
 	if (p->policyvers >= POLICYDB_VERSION_VALIDATETRANS) {
 		/* grab the validatetrans rules */
-		rc = next_entry(buf, fp, sizeof(u32));
+		rc = next_u32_entries(fp, &ncons);
 		if (rc)
 			goto bad;
-		ncons = le32_to_cpu(buf[0]);
 		rc = read_cons_helper(p, &cladatum->validatetrans, ncons, 1,
 				      fp);
 		if (rc)
@@ -1407,8 +1392,6 @@ static int role_read(struct policydb *p, struct symtab *s, struct policy_file *f
 	char *key = NULL;
 	struct role_datum *role;
 	int rc;
-	unsigned int to_read = 2;
-	__le32 buf[3];
 	u32 len;
 
 	role = kzalloc(sizeof(*role), GFP_KERNEL);
@@ -1416,16 +1399,11 @@ static int role_read(struct policydb *p, struct symtab *s, struct policy_file *f
 		return -ENOMEM;
 
 	if (p->policyvers >= POLICYDB_VERSION_BOUNDARY)
-		to_read = 3;
-
-	rc = next_entry(buf, fp, sizeof(buf[0]) * to_read);
+		rc = next_u32_entries(fp, &len, &role->value, &role->bounds);
+	else
+		rc = next_u32_entries(fp, &len, &role->value);
 	if (rc)
 		goto bad;
-
-	len = le32_to_cpu(buf[0]);
-	role->value = le32_to_cpu(buf[1]);
-	if (p->policyvers >= POLICYDB_VERSION_BOUNDARY)
-		role->bounds = le32_to_cpu(buf[2]);
 
 	rc = str_read(&key, GFP_KERNEL, fp, len);
 	if (rc)
@@ -1513,17 +1491,15 @@ bad:
  */
 static int mls_read_level(struct mls_level *lp, struct policy_file *fp)
 {
-	__le32 buf[1];
 	int rc;
 
 	memset(lp, 0, sizeof(*lp));
 
-	rc = next_entry(buf, fp, sizeof buf);
+	rc = next_u32_entries(fp, &lp->sens);
 	if (rc) {
 		pr_err("SELinux: mls: truncated level\n");
 		return rc;
 	}
-	lp->sens = le32_to_cpu(buf[0]);
 
 	rc = ebitmap_read(&lp->cat, fp);
 	if (rc) {
@@ -1538,8 +1514,6 @@ static int user_read(struct policydb *p, struct symtab *s, struct policy_file *f
 	char *key = NULL;
 	struct user_datum *usrdatum;
 	int rc;
-	unsigned int to_read = 2;
-	__le32 buf[3];
 	u32 len;
 
 	usrdatum = kzalloc(sizeof(*usrdatum), GFP_KERNEL);
@@ -1547,16 +1521,11 @@ static int user_read(struct policydb *p, struct symtab *s, struct policy_file *f
 		return -ENOMEM;
 
 	if (p->policyvers >= POLICYDB_VERSION_BOUNDARY)
-		to_read = 3;
-
-	rc = next_entry(buf, fp, sizeof(buf[0]) * to_read);
+		rc = next_u32_entries(fp, &len, &usrdatum->value, &usrdatum->bounds);
+	else
+		rc = next_u32_entries(fp, &len, &usrdatum->value);
 	if (rc)
 		goto bad;
-
-	len = le32_to_cpu(buf[0]);
-	usrdatum->value = le32_to_cpu(buf[1]);
-	if (p->policyvers >= POLICYDB_VERSION_BOUNDARY)
-		usrdatum->bounds = le32_to_cpu(buf[2]);
 
 	rc = str_read(&key, GFP_KERNEL, fp, len);
 	if (rc)
@@ -1830,17 +1799,14 @@ static int range_read(struct policydb *p, struct policy_file *fp)
 	struct range_trans *rt = NULL;
 	struct mls_range *r = NULL;
 	int rc;
-	__le32 buf[2];
 	u32 i, nel;
 
 	if (p->policyvers < POLICYDB_VERSION_MLS)
 		return 0;
 
-	rc = next_entry(buf, fp, sizeof(u32));
+	rc = next_u32_entries(fp, &nel);
 	if (rc)
 		return rc;
-
-	nel = le32_to_cpu(buf[0]);
 
 	rc = hashtab_init(&p->range_tr, nel);
 	if (rc)
@@ -1852,17 +1818,14 @@ static int range_read(struct policydb *p, struct policy_file *fp)
 		if (!rt)
 			goto out;
 
-		rc = next_entry(buf, fp, (sizeof(u32) * 2));
+		rc = next_u32_entries(fp, &rt->source_type, &rt->target_type);
 		if (rc)
 			goto out;
 
-		rt->source_type = le32_to_cpu(buf[0]);
-		rt->target_type = le32_to_cpu(buf[1]);
 		if (p->policyvers >= POLICYDB_VERSION_RANGETRANS) {
-			rc = next_entry(buf, fp, sizeof(u32));
+			rc = next_u32_entries(fp, &rt->target_class);
 			if (rc)
 				goto out;
-			rt->target_class = le32_to_cpu(buf[0]);
 		} else
 			rt->target_class = p->process_class;
 
@@ -2079,16 +2042,14 @@ out:
 static int filename_trans_read(struct policydb *p, struct policy_file *fp)
 {
 	u32 nel, i;
-	__le32 buf[1];
 	int rc;
 
 	if (p->policyvers < POLICYDB_VERSION_FILENAME_TRANS)
 		return 0;
 
-	rc = next_entry(buf, fp, sizeof(u32));
+	rc = next_u32_entries(fp, &nel);
 	if (rc)
 		return rc;
-	nel = le32_to_cpu(buf[0]);
 
 	if (p->policyvers < POLICYDB_VERSION_COMP_FTRANS) {
 		p->compat_filename_trans_count = nel;
@@ -2121,22 +2082,19 @@ static int genfs_read(struct policydb *p, struct policy_file *fp)
 {
 	int rc;
 	u32 i, j, nel, nel2, len, len2;
-	__le32 buf[1];
 	struct ocontext *l, *c;
 	struct ocontext *newc = NULL;
 	struct genfs *genfs_p, *genfs;
 	struct genfs *newgenfs = NULL;
 
-	rc = next_entry(buf, fp, sizeof(u32));
+	rc = next_u32_entries(fp, &nel);
 	if (rc)
 		return rc;
-	nel = le32_to_cpu(buf[0]);
 
 	for (i = 0; i < nel; i++) {
-		rc = next_entry(buf, fp, sizeof(u32));
+		rc = next_u32_entries(fp, &len);
 		if (rc)
 			goto out;
-		len = le32_to_cpu(buf[0]);
 
 		rc = -ENOMEM;
 		newgenfs = kzalloc(sizeof(*newgenfs), GFP_KERNEL);
@@ -2166,16 +2124,14 @@ static int genfs_read(struct policydb *p, struct policy_file *fp)
 		genfs = newgenfs;
 		newgenfs = NULL;
 
-		rc = next_entry(buf, fp, sizeof(u32));
+		rc = next_u32_entries(fp, &nel2);
 		if (rc)
 			goto out;
 
-		nel2 = le32_to_cpu(buf[0]);
 		for (j = 0; j < nel2; j++) {
-			rc = next_entry(buf, fp, sizeof(u32));
+			rc = next_u32_entries(fp, &len);
 			if (rc)
 				goto out;
-			len = le32_to_cpu(buf[0]);
 
 			rc = -ENOMEM;
 			newc = kzalloc(sizeof(*newc), GFP_KERNEL);
@@ -2186,11 +2142,10 @@ static int genfs_read(struct policydb *p, struct policy_file *fp)
 			if (rc)
 				goto out;
 
-			rc = next_entry(buf, fp, sizeof(u32));
+			rc = next_u32_entries(fp, &newc->v.sclass);
 			if (rc)
 				goto out;
 
-			newc->v.sclass = le32_to_cpu(buf[0]);
 			rc = context_read_and_validate(&newc->context[0], p,
 						       fp);
 			if (rc)
@@ -2242,10 +2197,9 @@ static int ocontext_read(struct policydb *p,
 	u32 nodebuf[8];
 
 	for (i = 0; i < info->ocon_num; i++) {
-		rc = next_entry(buf, fp, sizeof(u32));
+		rc = next_u32_entries(fp, &nel);
 		if (rc)
 			goto out;
-		nel = le32_to_cpu(buf[0]);
 
 		l = NULL;
 		for (j = 0; j < nel; j++) {
@@ -2261,11 +2215,10 @@ static int ocontext_read(struct policydb *p,
 
 			switch (i) {
 			case OCON_ISID:
-				rc = next_entry(buf, fp, sizeof(u32));
+				rc = next_u32_entries(fp, &c->sid[0]);
 				if (rc)
 					goto out;
 
-				c->sid[0] = le32_to_cpu(buf[0]);
 				rc = context_read_and_validate(&c->context[0],
 							       p, fp);
 				if (rc)
@@ -2273,10 +2226,9 @@ static int ocontext_read(struct policydb *p,
 				break;
 			case OCON_FS:
 			case OCON_NETIF:
-				rc = next_entry(buf, fp, sizeof(u32));
+				rc = next_u32_entries(fp, &len);
 				if (rc)
 					goto out;
-				len = le32_to_cpu(buf[0]);
 
 				rc = str_read(&c->u.name, GFP_KERNEL, fp, len);
 				if (rc)
@@ -2319,19 +2271,17 @@ static int ocontext_read(struct policydb *p,
 					goto out;
 				break;
 			case OCON_FSUSE:
-				rc = next_entry(buf, fp, sizeof(u32) * 2);
+				rc = next_u32_entries(fp, &c->v.behavior, &len);
 				if (rc)
 					goto out;
 
 				rc = -EINVAL;
-				c->v.behavior = le32_to_cpu(buf[0]);
 				/* Determined at runtime, not in policy DB. */
 				if (c->v.behavior == SECURITY_FS_USE_MNTPOINT)
 					goto out;
 				if (c->v.behavior > SECURITY_FS_USE_MAX)
 					goto out;
 
-				len = le32_to_cpu(buf[1]);
 				rc = str_read(&c->u.name, GFP_KERNEL, fp, len);
 				if (rc)
 					goto out;
@@ -2368,12 +2318,9 @@ static int ocontext_read(struct policydb *p,
 				c->u.ibpkey.subnet_prefix =
 					be64_to_cpu(prefixbuf[0]);
 
-				rc = next_entry(buf, fp, sizeof(u32) * 2);
+				rc = next_u32_entries(fp, &pkey_lo, &pkey_hi);
 				if (rc)
 					goto out;
-
-				pkey_lo = le32_to_cpu(buf[0]);
-				pkey_hi = le32_to_cpu(buf[1]);
 
 				if (pkey_lo > U16_MAX || pkey_hi > U16_MAX) {
 					rc = -EINVAL;
@@ -2392,17 +2339,15 @@ static int ocontext_read(struct policydb *p,
 			case OCON_IBENDPORT: {
 				u32 port;
 
-				rc = next_entry(buf, fp, sizeof(u32) * 2);
+				rc = next_u32_entries(fp, &len, &port);
 				if (rc)
 					goto out;
-				len = le32_to_cpu(buf[0]);
 
 				rc = str_read(&c->u.ibendport.dev_name,
 					      GFP_KERNEL, fp, len);
 				if (rc)
 					goto out;
 
-				port = le32_to_cpu(buf[1]);
 				if (port > U8_MAX || port == 0) {
 					rc = -EINVAL;
 					goto out;
@@ -2434,29 +2379,27 @@ int policydb_read(struct policydb *p, struct policy_file *fp)
 	struct role_trans_key *rtk = NULL;
 	struct role_trans_datum *rtd = NULL;
 	int rc;
-	__le32 buf[4];
-	u32 i, j, len, nprim, nel, perm;
+	u32 flags, i, j, len, magic, nel, nocon, nprim, nsym, perm;
 
-	char *policydb_str;
+	char policydb_str[sizeof(POLICYDB_STRING)] = {'\0'};
 	const struct policydb_compat_info *info;
 
 	policydb_init(p);
 
 	/* Read the magic number and string length. */
-	rc = next_entry(buf, fp, sizeof(u32) * 2);
+	rc = next_u32_entries(fp, &magic, &len);
 	if (rc)
 		goto bad;
 
 	rc = -EINVAL;
-	if (le32_to_cpu(buf[0]) != POLICYDB_MAGIC) {
+	if (magic != POLICYDB_MAGIC) {
 		pr_err("SELinux:  policydb magic number 0x%x does "
 		       "not match expected magic number 0x%x\n",
-		       le32_to_cpu(buf[0]), POLICYDB_MAGIC);
+		       magic, POLICYDB_MAGIC);
 		goto bad;
 	}
 
 	rc = -EINVAL;
-	len = le32_to_cpu(buf[1]);
 	if (len != strlen(POLICYDB_STRING)) {
 		pr_err("SELinux:  policydb string length %d does not "
 		       "match expected length %zu\n",
@@ -2464,14 +2407,9 @@ int policydb_read(struct policydb *p, struct policy_file *fp)
 		goto bad;
 	}
 
-	rc = str_read(&policydb_str, GFP_KERNEL, fp, len);
+	rc = next_entry(policydb_str, fp, len);
 	if (rc) {
-		if (rc == -ENOMEM) {
-			pr_err("SELinux:  unable to allocate memory for policydb string of length %d\n",
-			       len);
-		} else {
-			pr_err("SELinux:  truncated policydb string identifier\n");
-		}
+		pr_err("SELinux:  truncated policydb string identifier\n");
 		goto bad;
 	}
 
@@ -2480,30 +2418,25 @@ int policydb_read(struct policydb *p, struct policy_file *fp)
 		pr_err("SELinux:  policydb string %s does not match "
 		       "my string %s\n",
 		       policydb_str, POLICYDB_STRING);
-		kfree(policydb_str);
 		goto bad;
 	}
-	/* Done with policydb_str. */
-	kfree(policydb_str);
-	policydb_str = NULL;
 
 	/* Read the version and table sizes. */
-	rc = next_entry(buf, fp, sizeof(u32) * 4);
+	rc = next_u32_entries(fp, &p->policyvers, &flags, &nsym, &nocon);
 	if (rc)
 		goto bad;
 
 	rc = -EINVAL;
-	p->policyvers = le32_to_cpu(buf[0]);
 	if (p->policyvers < POLICYDB_VERSION_MIN ||
 	    p->policyvers > POLICYDB_VERSION_MAX) {
 		pr_err("SELinux:  policydb version %d does not match "
 		       "my version range %d-%d\n",
-		       le32_to_cpu(buf[0]), POLICYDB_VERSION_MIN,
+		       p->policyvers, POLICYDB_VERSION_MIN,
 		       POLICYDB_VERSION_MAX);
 		goto bad;
 	}
 
-	if ((le32_to_cpu(buf[1]) & POLICYDB_CONFIG_MLS)) {
+	if ((flags & POLICYDB_CONFIG_MLS)) {
 		p->mls_enabled = 1;
 
 		rc = -EINVAL;
@@ -2514,8 +2447,8 @@ int policydb_read(struct policydb *p, struct policy_file *fp)
 			goto bad;
 		}
 	}
-	p->reject_unknown = !!(le32_to_cpu(buf[1]) & REJECT_UNKNOWN);
-	p->allow_unknown = !!(le32_to_cpu(buf[1]) & ALLOW_UNKNOWN);
+	p->reject_unknown = !!(flags & REJECT_UNKNOWN);
+	p->allow_unknown = !!(flags & ALLOW_UNKNOWN);
 
 	if (p->policyvers >= POLICYDB_VERSION_POLCAP) {
 		rc = ebitmap_read(&p->policycaps, fp);
@@ -2539,21 +2472,18 @@ int policydb_read(struct policydb *p, struct policy_file *fp)
 	}
 
 	rc = -EINVAL;
-	if (le32_to_cpu(buf[2]) != info->sym_num ||
-	    le32_to_cpu(buf[3]) != info->ocon_num) {
+	if (nsym != info->sym_num ||
+		nocon != info->ocon_num) {
 		pr_err("SELinux:  policydb table sizes (%d,%d) do "
-		       "not match mine (%d,%d)\n",
-		       le32_to_cpu(buf[2]), le32_to_cpu(buf[3]), info->sym_num,
-		       info->ocon_num);
+		       "not match mine (%d,%d)\n", nsym, nocon,
+		       info->sym_num, info->ocon_num);
 		goto bad;
 	}
 
 	for (i = 0; i < info->sym_num; i++) {
-		rc = next_entry(buf, fp, sizeof(u32) * 2);
+		rc = next_u32_entries(fp, &nprim, &nel);
 		if (rc)
 			goto bad;
-		nprim = le32_to_cpu(buf[0]);
-		nel = le32_to_cpu(buf[1]);
 
 		rc = symtab_init(&p->symtab[i], nel);
 		if (rc)
@@ -2591,10 +2521,9 @@ int policydb_read(struct policydb *p, struct policy_file *fp)
 			goto bad;
 	}
 
-	rc = next_entry(buf, fp, sizeof(u32));
+	rc = next_u32_entries(fp, &nel);
 	if (rc)
 		goto bad;
-	nel = le32_to_cpu(buf[0]);
 
 	rc = hashtab_init(&p->role_tr, nel);
 	if (rc)
@@ -2610,18 +2539,15 @@ int policydb_read(struct policydb *p, struct policy_file *fp)
 		if (!rtd)
 			goto bad;
 
-		rc = next_entry(buf, fp, sizeof(u32) * 3);
+		rc = next_u32_entries(fp, &rtk->role, &rtk->type,
+				      &rtd->new_role);
 		if (rc)
 			goto bad;
 
-		rtk->role = le32_to_cpu(buf[0]);
-		rtk->type = le32_to_cpu(buf[1]);
-		rtd->new_role = le32_to_cpu(buf[2]);
 		if (p->policyvers >= POLICYDB_VERSION_ROLETRANS) {
-			rc = next_entry(buf, fp, sizeof(u32));
+			rc = next_u32_entries(fp, &rtk->tclass);
 			if (rc)
 				goto bad;
-			rtk->tclass = le32_to_cpu(buf[0]);
 		} else
 			rtk->tclass = p->process_class;
 
@@ -2642,10 +2568,9 @@ int policydb_read(struct policydb *p, struct policy_file *fp)
 
 	hash_eval(&p->role_tr, "roletr", NULL);
 
-	rc = next_entry(buf, fp, sizeof(u32));
+	rc = next_u32_entries(fp, &nel);
 	if (rc)
 		goto bad;
-	nel = le32_to_cpu(buf[0]);
 	lra = NULL;
 	for (i = 0; i < nel; i++) {
 		rc = -ENOMEM;
@@ -2656,13 +2581,11 @@ int policydb_read(struct policydb *p, struct policy_file *fp)
 			lra->next = ra;
 		else
 			p->role_allow = ra;
-		rc = next_entry(buf, fp, sizeof(u32) * 2);
+		rc = next_u32_entries(fp, &ra->role, &ra->new_role);
 		if (rc)
 			goto bad;
 
 		rc = -EINVAL;
-		ra->role = le32_to_cpu(buf[0]);
-		ra->new_role = le32_to_cpu(buf[1]);
 		if (!policydb_role_isvalid(p, ra->role) ||
 		    !policydb_role_isvalid(p, ra->new_role))
 			goto bad;
