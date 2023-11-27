@@ -1442,34 +1442,27 @@ static int type_read(struct policydb *p, struct symtab *s, struct policy_file *f
 	char *key = NULL;
 	struct type_datum *typdatum;
 	int rc;
-	unsigned int to_read = 3;
-	__le32 buf[4];
-	u32 len;
+	u32 len, tmp;
 
 	typdatum = kzalloc(sizeof(*typdatum), GFP_KERNEL);
 	if (!typdatum)
 		return -ENOMEM;
 
 	if (p->policyvers >= POLICYDB_VERSION_BOUNDARY)
-		to_read = 4;
-
-	rc = next_entry(buf, fp, sizeof(buf[0]) * to_read);
+		rc = next_u32_entries(fp, &len, &typdatum->value,
+				      &tmp, &typdatum->bounds);
+	else
+		rc = next_u32_entries(fp, &len, &typdatum->value, &tmp);
 	if (rc)
 		goto bad;
 
-	len = le32_to_cpu(buf[0]);
-	typdatum->value = le32_to_cpu(buf[1]);
 	if (p->policyvers >= POLICYDB_VERSION_BOUNDARY) {
-		u32 prop = le32_to_cpu(buf[2]);
-
-		if (prop & TYPEDATUM_PROPERTY_PRIMARY)
+		if (tmp & TYPEDATUM_PROPERTY_PRIMARY)
 			typdatum->primary = 1;
-		if (prop & TYPEDATUM_PROPERTY_ATTRIBUTE)
+		if (tmp & TYPEDATUM_PROPERTY_ATTRIBUTE)
 			typdatum->attribute = 1;
-
-		typdatum->bounds = le32_to_cpu(buf[3]);
 	} else {
-		typdatum->primary = le32_to_cpu(buf[2]);
+		typdatum->primary = tmp;
 	}
 
 	rc = str_read(&key, GFP_KERNEL, fp, len);
@@ -1558,19 +1551,17 @@ static int sens_read(struct policydb *p, struct symtab *s, struct policy_file *f
 	char *key = NULL;
 	struct level_datum *levdatum;
 	int rc;
-	__le32 buf[2];
-	u32 len;
+	u32 len, isalias;
 
 	levdatum = kzalloc(sizeof(*levdatum), GFP_KERNEL);
 	if (!levdatum)
 		return -ENOMEM;
 
-	rc = next_entry(buf, fp, sizeof buf);
+	rc = next_u32_entries(fp, &len, &isalias);
 	if (rc)
 		goto bad;
 
-	len = le32_to_cpu(buf[0]);
-	levdatum->isalias = le32_to_cpu(buf[1]);
+	levdatum->isalias = isalias;
 
 	rc = str_read(&key, GFP_KERNEL, fp, len);
 	if (rc)
@@ -1594,20 +1585,17 @@ static int cat_read(struct policydb *p, struct symtab *s, struct policy_file *fp
 	char *key = NULL;
 	struct cat_datum *catdatum;
 	int rc;
-	__le32 buf[3];
-	u32 len;
+	u32 len, isalias;
 
 	catdatum = kzalloc(sizeof(*catdatum), GFP_KERNEL);
 	if (!catdatum)
 		return -ENOMEM;
 
-	rc = next_entry(buf, fp, sizeof buf);
+	rc = next_u32_entries(fp, &len, &catdatum->value, &isalias);
 	if (rc)
 		goto bad;
 
-	len = le32_to_cpu(buf[0]);
-	catdatum->value = le32_to_cpu(buf[1]);
-	catdatum->isalias = le32_to_cpu(buf[2]);
+	catdatum->isalias = isalias;
 
 	rc = str_read(&key, GFP_KERNEL, fp, len);
 	if (rc)
@@ -1870,31 +1858,25 @@ static int filename_trans_read_helper_compat(struct policydb *p, struct policy_f
 	struct filename_trans_key key, *ft = NULL;
 	struct filename_trans_datum *last, *datum = NULL;
 	char *name = NULL;
-	u32 len, stype, otype;
-	__le32 buf[4];
+	u32 len, stype, otype, tclass;
 	int rc;
 
 	/* length of the path component string */
-	rc = next_entry(buf, fp, sizeof(u32));
+	rc = next_u32_entries(fp, &len);
 	if (rc)
 		return rc;
-	len = le32_to_cpu(buf[0]);
 
 	/* path component string */
 	rc = str_read(&name, GFP_KERNEL, fp, len);
 	if (rc)
 		return rc;
 
-	rc = next_entry(buf, fp, sizeof(u32) * 4);
+	rc = next_u32_entries(fp, &stype, &key.ttype, &tclass, &otype);
 	if (rc)
 		goto out;
 
-	stype = le32_to_cpu(buf[0]);
-	key.ttype = le32_to_cpu(buf[1]);
-	key.tclass = le32_to_cpu(buf[2]);
 	key.name = name;
-
-	otype = le32_to_cpu(buf[3]);
+	key.tclass = tclass;
 
 	last = NULL;
 	datum = policydb_filenametr_search(p, &key);
@@ -1956,28 +1938,22 @@ static int filename_trans_read_helper(struct policydb *p, struct policy_file *fp
 	struct filename_trans_datum **dst, *datum, *first = NULL;
 	char *name = NULL;
 	u32 len, ttype, tclass, ndatum, i;
-	__le32 buf[3];
 	int rc;
 
 	/* length of the path component string */
-	rc = next_entry(buf, fp, sizeof(u32));
+	rc = next_u32_entries(fp, &len);
 	if (rc)
 		return rc;
-	len = le32_to_cpu(buf[0]);
 
 	/* path component string */
 	rc = str_read(&name, GFP_KERNEL, fp, len);
 	if (rc)
 		return rc;
 
-	rc = next_entry(buf, fp, sizeof(u32) * 3);
+	rc = next_u32_entries(fp, &ttype, &tclass, &ndatum);
 	if (rc)
 		goto out;
 
-	ttype = le32_to_cpu(buf[0]);
-	tclass = le32_to_cpu(buf[1]);
-
-	ndatum = le32_to_cpu(buf[2]);
 	if (ndatum == 0) {
 		pr_err("SELinux:  Filename transition key with no datum\n");
 		rc = -ENOENT;
@@ -1999,11 +1975,9 @@ static int filename_trans_read_helper(struct policydb *p, struct policy_file *fp
 		if (rc)
 			goto out;
 
-		rc = next_entry(buf, fp, sizeof(u32));
+		rc = next_u32_entries(fp, &datum->otype);
 		if (rc)
 			goto out;
-
-		datum->otype = le32_to_cpu(buf[0]);
 
 		dst = &datum->next;
 	}

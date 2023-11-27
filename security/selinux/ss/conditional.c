@@ -210,26 +210,25 @@ int cond_read_bool(struct policydb *p, struct symtab *s, struct policy_file *fp)
 {
 	char *key = NULL;
 	struct cond_bool_datum *booldatum;
-	__le32 buf[3];
-	u32 len;
+	u32 len, state;
 	int rc;
 
 	booldatum = kzalloc(sizeof(*booldatum), GFP_KERNEL);
 	if (!booldatum)
 		return -ENOMEM;
 
-	rc = next_entry(buf, fp, sizeof(buf));
+	rc = next_u32_entries(fp, &booldatum->value, &state, &len);
 	if (rc)
 		goto err;
 
-	booldatum->value = le32_to_cpu(buf[0]);
-	booldatum->state = le32_to_cpu(buf[1]);
+	booldatum->state = state;
 
 	rc = -EINVAL;
 	if (!bool_isvalid(booldatum))
 		goto err;
 
-	len = le32_to_cpu(buf[2]);
+	if (((len == 0) || (len == (u32)-1)))
+		goto err;
 
 	rc = str_read(&key, GFP_KERNEL, fp, len);
 	if (rc)
@@ -369,18 +368,16 @@ static int expr_node_isvalid(struct policydb *p, struct cond_expr_node *expr)
 
 static int cond_read_node(struct policydb *p, struct cond_node *node, struct policy_file *fp)
 {
-	__le32 buf[2];
-	u32 i, len;
+	u32 i, len, cur_state;
 	int rc;
 
-	rc = next_entry(buf, fp, sizeof(u32) * 2);
+	rc = next_u32_entries(fp, &cur_state, &len);
 	if (rc)
 		return rc;
 
-	node->cur_state = le32_to_cpu(buf[0]);
+	node->cur_state = cur_state;
 
 	/* expr */
-	len = le32_to_cpu(buf[1]);
 	node->expr.nodes = kcalloc(len, sizeof(*node->expr.nodes), GFP_KERNEL);
 	if (!node->expr.nodes)
 		return -ENOMEM;
