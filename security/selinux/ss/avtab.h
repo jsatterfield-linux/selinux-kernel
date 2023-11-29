@@ -93,6 +93,7 @@ struct avtab {
 void avtab_init(struct avtab *h);
 int avtab_alloc(struct avtab *h, u32 nrules);
 int avtab_alloc_dup(struct avtab *new, const struct avtab *orig);
+int avtab_shrink_nodes(struct avtab *h);
 void avtab_destroy(struct avtab *h);
 
 #define MAX_AVTAB_HASH_BITS    16

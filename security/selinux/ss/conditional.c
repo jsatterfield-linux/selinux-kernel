@@ -409,6 +409,40 @@ static int cond_read_node(struct policydb *p, struct cond_node *node, struct pol
 	return cond_read_av_list(p, fp, &node->false_list, &node->true_list);
 }
 
+static void cond_rebase_av_list(struct cond_av_list *list,
+				struct avtab_node *new, struct avtab_node *old)
+{
+	struct avtab_node **cur;
+	int i;
+
+	for (i = 0; i < list->len; i++) {
+		cur = &list->nodes[i];
+		if (*cur)
+			*cur = new + (*cur - old);
+	}
+}
+
+static int cond_shrink_av(struct policydb *p)
+{
+	struct avtab_node *old, *new;
+	int i, rc;
+
+	if (!p->cond_list_len)
+		return 0;
+
+	old = p->te_cond_avtab.nodes;
+	rc = avtab_shrink_nodes(&p->te_cond_avtab);
+	if (rc)
+		return rc;
+	new = p->te_cond_avtab.nodes;
+
+	for (i = 0; i < p->cond_list_len; i++) {
+		cond_rebase_av_list(&p->cond_list[i].true_list, new, old);
+		cond_rebase_av_list(&p->cond_list[i].false_list, new, old);
+	}
+	return 0;
+}
+
 int cond_read_list(struct policydb *p, struct policy_file *fp)
 {
 	__le32 buf[1];
@@ -436,6 +470,10 @@ int cond_read_list(struct policydb *p, struct policy_file *fp)
 		if (rc)
 			goto err;
 	}
+	rc = cond_shrink_av(p);
+	if (rc)
+		goto err;
+
 	return 0;
 err:
 	cond_list_destroy(p);

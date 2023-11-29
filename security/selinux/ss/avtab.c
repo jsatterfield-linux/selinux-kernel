@@ -63,6 +63,8 @@ static inline u32 avtab_hash(const struct avtab_key *keyp, u32 mask)
 	return hash & mask;
 }
 
+static int avtab_grow_nodes(struct avtab *h);
+
 static struct avtab_node *avtab_insert_node(struct avtab *h,
 					    struct avtab_node **dst,
 					    const struct avtab_key *key,
@@ -70,7 +72,7 @@ static struct avtab_node *avtab_insert_node(struct avtab *h,
 {
 	struct avtab_node *newnode;
 	struct avtab_extended_perms *xperms;
-	if (h->nel == h->nnodes)
+	if (h->nel == h->nnodes && avtab_grow_nodes(h) != 0)
 		return NULL;
 	newnode = &h->nodes[h->nel];
 	newnode->key = *key;
@@ -293,6 +295,51 @@ int avtab_alloc(struct avtab *h, u32 nrules)
 int avtab_alloc_dup(struct avtab *new, const struct avtab *orig)
 {
 	return avtab_alloc_common(new, orig->nslot, orig->nel);
+}
+
+static int avtab_change_nodes_size(struct avtab *h, u32 nnodes)
+{
+	u32 i;
+	struct avtab_node *new_nodes, *cur, *new;
+
+	if (!h->nodes)
+		return -EINVAL;
+
+	new_nodes = kvcalloc(nnodes, sizeof(*h->nodes), GFP_KERNEL);
+	if (!new_nodes)
+		return -ENOMEM;
+
+	if (h->nel) {
+		/* copy data and update pointers to offset from new_nodes */
+		for (i = 0; i < h->nslot; i++) {
+			cur = h->htable[i];
+			if (cur)
+				h->htable[i] = new_nodes + (cur - h->nodes);
+		}
+		for (i = 0; i < h->nel; i++) {
+			cur = &h->nodes[i];
+			new = &new_nodes[i];
+			new->key = cur->key;
+			new->datum = cur->datum;
+			if (cur->next)
+				new_nodes[i].next = new_nodes + (cur->next - h->nodes);
+		}
+	}
+
+	kvfree(h->nodes);
+	h->nodes = new_nodes;
+	h->nnodes = nnodes;
+	return 0;
+}
+
+static int avtab_grow_nodes(struct avtab *h)
+{
+	return avtab_change_nodes_size(h, h->nnodes + 1024);
+}
+
+int avtab_shrink_nodes(struct avtab *h)
+{
+	return avtab_change_nodes_size(h, h->nel);
 }
 
 #ifdef CONFIG_SECURITY_SELINUX_DEBUG
