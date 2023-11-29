@@ -428,14 +428,21 @@ int cond_read_list(struct policydb *p, struct policy_file *fp)
 		return -ENOMEM;
 	p->cond_list_len = len;
 
-	/* first pass to only calculate the avrule count */
-	tmp_fp = *fp;
-	nrules = 0;
-	for (i = 0; i < p->cond_list_len; i++) {
-		rc = cond_read_node(p, &p->cond_list[i], &tmp_fp, &nrules);
+	if (p->policyvers < POLICYDB_VERSION_COND_RULE_CNT) {
+		/* manual pass to calculate the avrule count */
+		tmp_fp = *fp;
+		nrules = 0;
+		for (i = 0; i < p->cond_list_len; i++) {
+			rc = cond_read_node(p, &p->cond_list[i], &tmp_fp, &nrules);
+			if (rc)
+				goto err;
+			cond_node_destroy(&p->cond_list[i]);
+		}
+	} else {
+		rc = next_entry(buf, fp, sizeof(buf));
 		if (rc)
-			goto err;
-		cond_node_destroy(&p->cond_list[i]);
+			return rc;
+		nrules = le32_to_cpu(buf[0]);
 	}
 
 	rc = avtab_alloc(&(p->te_cond_avtab), nrules);
@@ -552,6 +559,13 @@ int cond_write_list(struct policydb *p, struct policy_file *fp)
 	rc = put_entry(buf, sizeof(u32), 1, fp);
 	if (rc)
 		return rc;
+
+	if (p->policyvers >= POLICYDB_VERSION_COND_RULE_CNT) {
+		buf[0] = cpu_to_le32(p->te_cond_avtab.nel);
+		rc = put_entry(buf, sizeof(u32), 1, fp);
+		if (rc)
+			return rc;
+	}
 
 	for (i = 0; i < p->cond_list_len; i++) {
 		rc = cond_write_node(p, &p->cond_list[i], fp);

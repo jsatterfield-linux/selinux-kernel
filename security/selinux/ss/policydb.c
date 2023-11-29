@@ -160,6 +160,10 @@ static const struct policydb_compat_info policydb_compat[] = {
 		.sym_num = SYM_NUM,
 		.ocon_num = OCON_NUM,
 	},
+		.version = POLICYDB_VERSION_COND_RULE_CNT,
+		.sym_num = SYM_NUM,
+		.ocon_num = OCON_NUM,
+	}
 };
 
 static const struct policydb_compat_info *
